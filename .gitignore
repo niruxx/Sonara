@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# User data: database, logins, cover cache, logs, config.
+# NEVER committed and never touched by the update scripts.
+data/
+.env
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
