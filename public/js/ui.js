@@ -3,6 +3,17 @@ import { html, ic, el, esc } from './util.js';
 import { menuKeys, trapFocus } from './a11y.js';
 import { t } from './i18n.js';
 
+/**
+ * Remove an element once its closing animation has played. A timer backs up 'animationend',
+ * which never fires when a style or the reduced-motion setting means no animation runs.
+ */
+export function removeAfterAnimation(node, maxMs = 400) {
+  let gone = false;
+  const done = () => { if (!gone) { gone = true; node.remove(); } };
+  node.addEventListener('animationend', done, { once: true });
+  setTimeout(done, maxMs);
+}
+
 // ───────── Toasts ─────────
 
 export function toast(message, { type = 'info', ms = 2600 } = {}) {
@@ -11,7 +22,7 @@ export function toast(message, { type = 'info', ms = 2600 } = {}) {
   document.getElementById('toasts').append(box);
   setTimeout(() => {
     box.classList.add('out');
-    box.addEventListener('animationend', () => box.remove(), { once: true });
+    removeAfterAnimation(box);
   }, ms);
 }
 export const toastError = (err) => toast(err?.message || String(err), { type: 'error', ms: 4000 });
@@ -31,7 +42,7 @@ export function closeMenu() {
   if (hadFocus && menuOpener?.isConnected) menuOpener.focus({ preventScroll: true });
   menuOpener = null;
   m.classList.add('out');
-  m.addEventListener('animationend', () => m.remove(), { once: true });
+  removeAfterAnimation(m);
 }
 
 /**
@@ -130,7 +141,7 @@ export function modal(markup, build) {
       else if (opener?.isConnected && document.activeElement === document.body) opener.focus({ preventScroll: true });
       removeEventListener('keydown', onKey);
       back.classList.add('out');
-      back.addEventListener('animationend', () => back.remove(), { once: true });
+      removeAfterAnimation(back);
       resolve(value);
     };
     const onKey = (e) => { if (e.key === 'Escape') close(null); };
