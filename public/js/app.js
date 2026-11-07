@@ -1,17 +1,19 @@
 // Sonara web client — entry point.
 import { api, setUnauthorizedHandler } from './api.js';
 import { html, ic, el, art, fmtTime } from './util.js';
-import { player } from './player.js';
+import { player, eq } from './player.js';
+import { openEqualizer } from './eq.js';
 import { state, bus, refreshPlaylists, toggleFavorite, createPlaylist } from './state.js';
 import { route, match, onRoute, navigate, start as startRouter } from './router.js';
-import { dragSort, toastError } from './ui.js';
-import { trackMenu, emptyState } from './components.js';
+import { dragSort, toastError, toast, openMenu } from './ui.js';
+import { trackMenu, emptyState, artistLinks } from './components.js';
 import { attachSpectrum, startVisualizer } from './visualizer.js';
 import { clearPagePalette, settlePalette, setPlayingCover } from './theme.js';
 import { homeView, albumsView, artistsView, songsView, genresView, genreView } from './views/library.js';
 import { albumView, artistView, playlistsView, playlistView, favoritesView, searchView, searchInput } from './views/detail.js';
 import { settingsView, applyPrefs } from './views/settings.js';
 import { authView } from './views/auth.js';
+import { inboxView } from './views/inbox.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const rootEl = document.getElementById('root');
@@ -29,6 +31,7 @@ route('/playlists', playlistsView);
 route('/playlist/:id', playlistView);
 route('/favorites', favoritesView);
 route('/settings', settingsView);
+route('/inbox', inboxView);
 
 const NAV = [
   ['/', 'home', 'Home'],
@@ -76,7 +79,7 @@ function startApp(user) {
 
   onRoute(render);
   startRouter();
-  player.restore();
+  player.restore(user);
 }
 
 // ───────────────────────── Layout ─────────────────────────
@@ -94,6 +97,7 @@ function shell() {
       <nav class="nav">
         <a class="nav-item" href="/favorites" data-nav="/favorites">${ic('heart')}<span>Favorites</span></a>
         <a class="nav-item" href="/playlists" data-nav="/playlists">${ic('listMusic')}<span>Playlists</span></a>
+        ${u.isAdmin ? html`<a class="nav-item" href="/inbox" data-nav="/inbox">${ic('download')}<span>Inbox</span></a>` : ''}
       </nav>
       <div class="nav-pl"></div>
       <div class="user-chip">
@@ -139,6 +143,9 @@ function shell() {
       </div>
       <div class="pb-right">
         <button class="icon-btn sm hide-sm" data-open-np aria-label="Now playing" title="Now playing (F)">${ic('maximize')}</button>
+        <button class="icon-btn sm hide-sm pb-extra" data-speed aria-label="Playback speed" title="Playback speed"><span class="pill-label">1×</span></button>
+        <button class="icon-btn sm hide-sm" data-eq aria-label="Equalizer" title="Equalizer (E)">${ic('sliders')}</button>
+        <button class="icon-btn sm hide-sm" data-sleep aria-label="Sleep timer" title="Sleep timer">${ic('moon')}</button>
         <button class="icon-btn sm" data-queue aria-label="Queue" title="Queue (Q)">${ic('queue')}</button>
         <div class="volume">
           <button class="icon-btn sm" data-mute aria-label="Mute">${ic('volume')}</button>
@@ -317,7 +324,7 @@ function bindPlayerBar() {
   const vol = $('[data-vol]', bar);
   const mute = $('[data-mute]', bar);
   const drawVol = () => {
-    const v = player.audio.muted ? 0 : player.audio.volume;
+    const v = player.muted ? 0 : player.volume;
     setRange(vol, v, 1);
     mute.innerHTML = ic(v === 0 ? 'mute' : v < 0.5 ? 'volumeLow' : 'volume');
   };
@@ -328,18 +335,61 @@ function bindPlayerBar() {
   bar.addEventListener('wheel', (e) => {
     if (!e.target.closest('.volume')) return;
     e.preventDefault();
-    player.setVolume(player.audio.volume - Math.sign(e.deltaY) * 0.05);
+    player.setVolume(player.volume - Math.sign(e.deltaY) * 0.05);
   }, { passive: false });
 
   $('[data-pb-fav]', bar).addEventListener('click', () => player.current && toggleFavorite(player.current));
   bar.querySelectorAll('[data-open-np]').forEach((b) => b.addEventListener('click', () => player.current && toggleNowPlaying(true)));
   $('[data-queue]', bar).addEventListener('click', () => toggleQueue());
 
+  // Playback speed
+  const speed = $('[data-speed]', bar);
+  const drawRate = (r) => {
+    speed.querySelector('.pill-label').textContent = `${r}×`;
+    speed.classList.toggle('on', r !== 1);
+  };
+  drawRate(player.rate);
+  player.on('rate', drawRate);
+  speed.addEventListener('click', () => openMenu(speed, [
+    { head: 'Playback speed' },
+    ...[0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map((r) => ({
+      icon: r === player.rate ? 'check' : null, label: r === 1 ? 'Normal' : `${r}×`, action: () => player.setRate(r),
+    })),
+  ]));
+
+  // Equalizer
+  const eqBtn = $('[data-eq]', bar);
+  const drawEq = () => eqBtn.classList.toggle('on', !!eq.enabled);
+  drawEq();
+  eqBtn.addEventListener('click', async () => { await openEqualizer(); drawEq(); });
+
+  // Sleep timer
+  const sleep = $('[data-sleep]', bar);
+  let sleepTick = null;
+  const drawSleep = (s) => {
+    clearInterval(sleepTick);
+    sleep.classList.toggle('on', !!s);
+    const label = () => {
+      if (!player.sleep) return 'Sleep timer';
+      if (player.sleep.endOfTrack) return 'Sleep timer: stops after this song';
+      return `Sleep timer: ${Math.max(1, Math.ceil((player.sleep.at - Date.now()) / 60000))} min left`;
+    };
+    sleep.title = label();
+    if (s?.at) sleepTick = setInterval(() => { sleep.title = label(); }, 15000);
+  };
+  player.on('sleep', drawSleep);
+  sleep.addEventListener('click', () => openMenu(sleep, [
+    { head: sleep.title },
+    ...[5, 15, 30, 45, 60, 90].map((m) => ({ icon: 'clock', label: `${m} minutes`, action: () => { player.setSleep(m); toast(`Sleep timer set for ${m} minutes`); } })),
+    { icon: 'music', label: 'End of this song', action: () => { player.setSleep('track'); toast('Playback will stop after this song'); } },
+    ...(player.sleep ? ['sep', { icon: 'x', label: 'Turn off timer', action: () => { player.setSleep(null); toast('Sleep timer off'); } }] : []),
+  ]));
+
   player.on('track', (t) => {
     if (!t) return;
     const meta = $('.pb-meta', bar);
     meta.innerHTML = String(html`<div class="pb-title swap" title="${t.title}">${t.title}</div>
-      <div class="pb-artist swap"><a href="/artist/${t.artistId}">${t.artist}</a> · <a href="/album/${t.albumId}">${t.album}</a></div>`);
+      <div class="pb-artist swap">${artistLinks(t)} · <a href="/album/${t.albumId}">${t.album}</a></div>`);
     $('.pb-cover', bar).innerHTML = String(html`${art(t.cover, t.album, 'disc', 120)}<div class="expand">${ic('maximize')}</div>`);
     $('.pb-cover', bar).firstElementChild.classList.add('swap');
     const fav = $('[data-pb-fav]', bar);
@@ -423,7 +473,7 @@ function bindNowPlaying() {
     a.innerHTML = String(art(t.cover, t.album, 'disc', 600));
     a.classList.remove('swap'); void a.offsetWidth; a.classList.add('swap');
     $('.np-title', np).textContent = t.title;
-    $('.np-artist', np).innerHTML = String(html`<a href="/artist/${t.artistId}">${t.artist}</a> — <a href="/album/${t.albumId}">${t.album}</a>`);
+    $('.np-artist', np).innerHTML = String(html`${artistLinks(t)} — <a href="/album/${t.albumId}">${t.album}</a>`);
     $('[data-np-album]', np).textContent = t.album;
     const fav = $('[data-np-fav]', np);
     fav.dataset.fav = t.id;
@@ -453,13 +503,16 @@ function bindKeys() {
       ' ': () => player.toggle(),
       ArrowRight: () => (e.shiftKey ? player.next() : player.seek(player.time + 5)),
       ArrowLeft: () => (e.shiftKey ? player.prev() : player.seek(player.time - 5)),
-      ArrowUp: () => player.setVolume(player.audio.volume + 0.05),
-      ArrowDown: () => player.setVolume(player.audio.volume - 0.05),
+      ArrowUp: () => player.setVolume(player.volume + 0.05),
+      ArrowDown: () => player.setVolume(player.volume - 0.05),
+      '>': () => player.setRate(player.rate + 0.25),
+      '<': () => player.setRate(player.rate - 0.25),
       m: () => player.toggleMute(),
       s: () => player.toggleShuffle(),
       r: () => player.cycleRepeat(),
       f: () => player.current && toggleNowPlaying(),
       q: () => toggleQueue(),
+      e: async () => { await openEqualizer(); $('[data-eq]')?.classList.toggle('on', !!eq.enabled); },
       '/': () => { toggleNowPlaying(false); $('.search input').focus(); },
     }[k.length === 1 ? k.toLowerCase() : k];
     if (handled) {

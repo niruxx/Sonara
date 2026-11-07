@@ -1,10 +1,11 @@
 // Reusable view components: cards, track lists, track menus.
-import { html, ic, el, art, fmtTime, plural, hues } from './util.js';
+import { html, ic, el, art, fmtTime, fmtBytes, plural, hues } from './util.js';
 import { player } from './player.js';
-import { openMenu, dragSort } from './ui.js';
+import { openMenu, dragSort, modal, toastError } from './ui.js';
 import { api } from './api.js';
-import { state, bus, toggleFavorite, createPlaylist, addToPlaylist } from './state.js';
+import { state, bus, toggleFavorite, setRating, createPlaylist, addToPlaylist } from './state.js';
 import { navigate } from './router.js';
+import { fileMenuItems } from './fileops.js';
 
 // ───────── Cards ─────────
 
@@ -87,11 +88,78 @@ export function trackMenu(at, track, { tracks = [track], extra = [] } = {}) {
     'sep',
     { icon: 'list', label: 'Add to playlist…', action: (e) => playlistPicker(at instanceof Element ? at : e, tracks) },
     ...(!multi ? [{ icon: track.favorite ? 'heartFill' : 'heart', label: track.favorite ? 'Remove from Favorites' : 'Add to Favorites', action: () => toggleFavorite(track) }] : []),
+    ...(!multi ? [{ icon: track.rating ? 'starFill' : 'star', label: track.rating ? `Rating: ${'★'.repeat(track.rating)}` : 'Rate…', action: (e) => ratingMenu(at instanceof Element ? at : e, track) }] : []),
     ...(!multi ? ['sep',
       { icon: 'disc', label: 'Go to album', action: () => navigate(`/album/${track.albumId}`) },
-      { icon: 'mic', label: 'Go to artist', action: () => navigate(`/artist/${track.albumArtistId}`) }] : []),
+      ...(track.artists?.length > 1
+        ? track.artists.map((a) => ({ icon: 'mic', label: `Go to ${a.name}`, action: () => navigate(`/artist/${a.id}`) }))
+        : [{ icon: 'mic', label: 'Go to artist', action: () => navigate(`/artist/${track.artistId}`) }]),
+      { icon: 'info', label: 'Track details', action: () => trackDetails(track) }] : []),
+    ...(fileMenuItems(tracks).length ? ['sep', ...fileMenuItems(tracks)] : []),
     ...(extra.length ? ['sep', ...extra] : []),
   ]);
+}
+
+export function ratingMenu(at, track) {
+  openMenu(at, [
+    { head: 'Rate this song' },
+    ...[5, 4, 3, 2, 1].map((n) => ({ icon: n === track.rating ? 'check' : 'star', label: '★'.repeat(n) + '☆'.repeat(5 - n), action: () => setRating(track, n) })),
+    ...(track.rating ? ['sep', { icon: 'x', label: 'Clear rating', action: () => setRating(track, 0) }] : []),
+  ]);
+}
+
+/** Linked artist names for a track ("A, B & C" style credits become separate links). */
+export const artistLinks = (t) => (t.artists?.length > 1
+  ? html`${t.artists.map((a, i) => html`${i ? ', ' : ''}<a href="/artist/${a.id}">${a.name}</a>`)}`
+  : html`<a href="/artist/${t.artistId}">${t.artist}</a>`);
+
+const RELEASE_LABEL = { album: 'Album', ep: 'EP', single: 'Single', compilation: 'Compilation', live: 'Live', soundtrack: 'Soundtrack', remix: 'Remix', other: 'Other' };
+export const releaseLabel = (type, compilation) => (compilation ? 'Compilation' : RELEASE_LABEL[type] || (type ? type[0].toUpperCase() + type.slice(1) : 'Album'));
+
+const fmtGain = (g) => (g == null ? null : `${g > 0 ? '+' : ''}${g.toFixed(2)} dB`);
+
+export async function trackDetails(track) {
+  let t;
+  try { t = await api.get(`/tracks/${track.id}`); } catch (err) { toastError(err); return; }
+  const rows = [
+    ['Title', t.title],
+    ['Artists', t.artists.map((a) => a.name).join(', ')],
+    ['Album', t.album],
+    ['Album artist', t.albumArtists?.map((a) => a.name).join(', ') || t.albumArtist],
+    ['Track', t.trackNo ? `${t.trackNo}${t.discNo ? ` · disc ${t.discNo}` : ''}` : null],
+    ['Year', t.year ? `${t.year}${t.originalYear && t.originalYear !== t.year ? ` (originally ${t.originalYear})` : ''}` : null],
+    ['Release type', t.releaseType || t.compilation ? releaseLabel(t.releaseType, t.compilation) : null],
+    ['Genres', t.genres?.join(', ')],
+    ['Duration', fmtTime(t.duration)],
+    ['Format', [t.format, t.codec].filter(Boolean).join(' · ')],
+    ['Bitrate', t.bitrate ? `${Math.round(t.bitrate / 1000)} kbps` : null],
+    ['Sample rate', t.sampleRate ? `${(t.sampleRate / 1000).toFixed(1)} kHz` : null],
+    ['Size', t.size ? fmtBytes(t.size) : null],
+    ['ReplayGain (track)', [fmtGain(t.rgTrackGain), t.rgTrackPeak ? `peak ${t.rgTrackPeak.toFixed(3)}` : null].filter(Boolean).join(', ') || null],
+    ['ReplayGain (album)', [fmtGain(t.rgAlbumGain), t.rgAlbumPeak ? `peak ${t.rgAlbumPeak.toFixed(3)}` : null].filter(Boolean).join(', ') || null],
+    ['Your plays', String(t.playCount || 0)],
+    ['Last played', t.lastPlayed ? new Date(t.lastPlayed).toLocaleString() : null],
+    ['Added', new Date(t.addedAt).toLocaleDateString()],
+    ['MusicBrainz', t.mbzTrackId || t.mbzAlbumId ? 'Tagged' : null],
+    ['File', t.file],
+  ].filter(([, v]) => v);
+  modal(html`
+    <h3>Track details</h3>
+    <div class="stars" data-stars>${[1, 2, 3, 4, 5].map((n) => html`<button class="star ${n <= t.rating ? 'on' : ''}" data-n="${n}" aria-label="${n} stars">${ic(n <= t.rating ? 'starFill' : 'star')}</button>`)}</div>
+    <dl class="details">${rows.map(([k, v]) => html`<dt>${k}</dt><dd class="${k === 'File' ? 'mono' : ''}">${v}</dd>`)}</dl>
+    <div class="modal-actions"><button class="btn primary" data-close>Close</button></div>`, (box) => {
+    box.querySelector('[data-stars]').addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-n]');
+      if (!b) return;
+      const n = Number(b.dataset.n) === track.rating ? 0 : Number(b.dataset.n);
+      await setRating(track, n);
+      box.querySelectorAll('.star').forEach((s) => {
+        const on = Number(s.dataset.n) <= n;
+        s.classList.toggle('on', on);
+        s.innerHTML = ic(on ? 'starFill' : 'star');
+      });
+    });
+  });
 }
 
 export function playlistPicker(at, tracks) {
@@ -129,7 +197,7 @@ export function trackList(initial = [], opts = {}) {
           ${opts.cover !== false ? html`<div class="tl-cover">${art(t.cover, t.album)}</div>` : ''}
           <div class="tl-text">
             <div class="tl-title">${t.title}${t.lossless ? html`<span class="badge">${(t.codec || 'LOSSLESS').split(' ')[0]}</span>` : ''}</div>
-            <div class="tl-sub"><a href="/artist/${t.artistId}">${t.artist}</a></div>
+            <div class="tl-sub">${t.rating ? html`<span class="tl-rating" data-rating="${t.id}">${'★'.repeat(t.rating)}</span>` : html`<span class="tl-rating" data-rating="${t.id}"></span>`}${artistLinks(t)}</div>
           </div>
         </div>
         ${opts.album !== false ? html`<div class="tl-album"><a href="/album/${t.albumId}">${t.album}</a></div>` : ''}
@@ -209,6 +277,10 @@ bus.on('favorite', (id, on) => {
     void b.offsetWidth;
     b.classList.add('pop');
   });
+});
+
+bus.on('rating', (id, n) => {
+  document.querySelectorAll(`[data-rating="${id}"]`).forEach((s) => { s.textContent = '★'.repeat(n); });
 });
 
 // Highlight the current track in any visible list.

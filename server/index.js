@@ -6,7 +6,7 @@ import { log } from './logger.js';
 import { db } from './db.js';
 import { sessionMiddleware } from './auth.js';
 import { api } from './api.js';
-import { scanLibrary, scheduleScans } from './scanner.js';
+import { scanLibrary, scheduleScans, watchLibrary } from './scanner.js';
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const config = getConfig();
@@ -43,6 +43,7 @@ const server = app.listen(config.port, config.host, () => {
   if (!config.musicDirs.length) log.info('No music folders configured yet. Add one in Settings → Library.');
   if (config.scanOnStartup && config.musicDirs.length) setTimeout(() => scanLibrary(), 1500);
   scheduleScans();
+  watchLibrary();
 });
 
 server.on('error', (err) => {

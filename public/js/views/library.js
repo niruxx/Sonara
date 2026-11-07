@@ -3,6 +3,8 @@ import { api } from '../api.js';
 import { html, ic, el, greeting, plural, prefs } from '../util.js';
 import { player } from '../player.js';
 import { state } from '../state.js';
+import { navigate } from '../router.js';
+import { organizeDialog } from '../fileops.js';
 import { albumCard, artistCard, genreTile, trackList, emptyState, skeletonGrid } from '../components.js';
 
 /** Calls load() whenever the sentinel scrolls into view; stops when load returns false. */
@@ -39,6 +41,7 @@ export async function homeView() {
       <span class="muted">${plural(stats.tracks, 'song')} · ${plural(stats.albums, 'album')} · ${plural(stats.artists, 'artist')}</span>
     </div>
     ${home.recentlyPlayed.length ? section('Jump back in', null, html`<div class="recent-list"></div>`) : ''}
+    ${home.recentAlbums?.length ? section('Recently played albums', '/albums?sort=lastPlayed', html`<div class="carousel">${home.recentAlbums.map(albumCard)}</div>`) : ''}
     ${section('Recently added', '/albums?sort=recent', html`<div class="carousel">${home.recentlyAdded.map(albumCard)}</div>`)}
     ${home.topArtists.length ? section('Your top artists', '/artists', html`<div class="carousel">${home.topArtists.map((a, i) => artistCard({ ...a, albumCount: null }, i))}</div>`) : ''}
     ${home.mostPlayed.length ? section('On repeat', null, html`<div class="most-list"></div>`) : ''}
@@ -54,21 +57,62 @@ export async function homeView() {
 
 // ───────── Albums ─────────
 
-const ALBUM_SORTS = [['name', 'A–Z'], ['artist', 'Artist'], ['recent', 'Recently added'], ['year', 'Year'], ['random', 'Random']];
+const ALBUM_SORTS = [['name', 'A–Z'], ['artist', 'Artist'], ['recent', 'Recently added'], ['lastPlayed', 'Recently played'],
+  ['played', 'Most played'], ['rating', 'Top rated'], ['year', 'Newest'], ['oldest', 'Oldest'], ['random', 'Random']];
+const ALBUM_TYPES = [['', 'All'], ['album', 'Albums'], ['ep', 'EPs'], ['single', 'Singles'], ['compilation', 'Compilations'], ['live', 'Live'], ['soundtrack', 'Soundtracks']];
+
+/** Build a URL from the current query with some keys changed (null/'' removes them). */
+const withQuery = (path, query, patch) => {
+  const p = new URLSearchParams(query);
+  for (const [k, v] of Object.entries(patch)) (v == null || v === '' ? p.delete(k) : p.set(k, v));
+  const s = p.toString();
+  return s ? `${path}?${s}` : path;
+};
+
+/** Year-range inputs that navigate on change. */
+function yearFilter(v, path, query) {
+  const box = v.querySelector('.year-filter');
+  if (!box) return;
+  box.addEventListener('change', () => {
+    const [from, to] = [...box.querySelectorAll('input')].map((i) => i.value.trim());
+    navigate(withQuery(path, query, { yearFrom: from, yearTo: to }), { replace: true });
+  });
+  box.querySelector('[data-clear-years]')?.addEventListener('click', () => navigate(withQuery(path, query, { yearFrom: null, yearTo: null }), { replace: true }));
+}
+
+const yearInputs = (query, years) => html`<div class="year-filter">
+  ${ic('clock')}<input class="input sm" type="number" placeholder="${years?.min || 'From'}" value="${query.get('yearFrom') || ''}" min="0" max="9999" aria-label="From year">
+  <span class="muted">–</span><input class="input sm" type="number" placeholder="${years?.max || 'To'}" value="${query.get('yearTo') || ''}" min="0" max="9999" aria-label="To year">
+  ${query.get('yearFrom') || query.get('yearTo') ? html`<button class="icon-btn sm" data-clear-years aria-label="Clear years">${ic('x')}</button>` : ''}
+</div>`;
 
 export async function albumsView({ query }) {
   const sort = query.get('sort') || prefs.get('albumSort', 'name');
+  const type = query.get('type') || '';
+  const facets = await api.get('/albums/facets').catch(() => null);
+  const present = new Set((facets?.types || []).map((t) => t.type));
+  const types = ALBUM_TYPES.filter(([k]) => !k || present.has(k));
   const v = el(html`<div>
     <h1 class="page-title">Albums</h1>
-    <div class="toolbar"><div class="chips">${ALBUM_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="/albums?sort=${k}">${l}</a>`)}</div></div>
+    <div class="toolbar"><div class="chips">${ALBUM_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="${withQuery('/albums', query, { sort: k })}">${l}</a>`)}</div></div>
+    <div class="toolbar">
+      ${types.length > 2 ? html`<div class="chips">${types.map(([k, l]) => html`<a class="chip ${k === type ? 'active' : ''}" href="${withQuery('/albums', query, { type: k })}">${l}</a>`)}</div>` : ''}
+      ${yearInputs(query, facets?.years)}
+    </div>
     <div class="grid"></div><div class="sentinel"></div><div class="loader"><div class="logo-mark"><span></span><span></span><span></span><span></span><span></span></div></div>
   </div>`);
   prefs.set('albumSort', sort);
+  yearFilter(v, '/albums', query);
   const grid = v.querySelector('.grid');
+  const filtered = type || query.get('yearFrom') || query.get('yearTo') || ['played', 'lastPlayed', 'rating'].includes(sort);
   let offset = 0;
   const load = async () => {
-    const rows = await api.get('/albums', { sort, limit: 60, offset });
-    if (!offset && !rows.length) grid.replaceWith(el(noLibrary()));
+    const rows = await api.get('/albums', { sort, type, yearFrom: query.get('yearFrom'), yearTo: query.get('yearTo'), limit: 60, offset });
+    if (!offset && !rows.length) {
+      grid.replaceWith(el(filtered
+        ? emptyState('disc', 'No albums match', sort === 'played' || sort === 'lastPlayed' ? 'Play some music and it will show up here.' : sort === 'rating' ? 'Rate songs from their ⋯ menu to see your top albums.' : 'Try a different filter.')
+        : noLibrary()));
+    }
     grid.insertAdjacentHTML('beforeend', rows.map((a, i) => albumCard(a, i)).join(''));
     offset += rows.length;
     if (rows.length < 60) { v.querySelector('.loader')?.remove(); return false; }
@@ -97,35 +141,58 @@ export async function artistsView() {
 
 // ───────── Songs ─────────
 
-const TRACK_SORTS = [['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['recent', 'Recently added'], ['year', 'Year']];
+const TRACK_SORTS = [['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['recent', 'Recently added'],
+  ['lastPlayed', 'Recently played'], ['played', 'Most played'], ['rating', 'Top rated'], ['year', 'Year'], ['duration', 'Longest']];
 
 export async function songsView({ query }) {
   const sort = query.get('sort') || prefs.get('trackSort', 'title');
   prefs.set('trackSort', sort);
-  const stats = await api.get('/stats');
+  const filters = {
+    sort, genre: query.get('genre'), yearFrom: query.get('yearFrom'), yearTo: query.get('yearTo'),
+    minRating: query.get('minRating'), favorites: query.get('favorites'),
+  };
+  const [stats, count, genres] = await Promise.all([api.get('/stats'), api.get('/tracks/count', filters), api.get('/genres').catch(() => [])]);
+  const minRating = Number(query.get('minRating') || 0);
   const v = el(html`<div>
     <h1 class="page-title">Songs</h1>
-    <p class="page-sub">${plural(stats.tracks, 'song')}</p>
+    <p class="page-sub">${plural(count.n, 'song')}${count.n !== stats.tracks ? ` of ${stats.tracks.toLocaleString()}` : ''}</p>
     <div class="actions">
       <button class="play-fab" data-play>${ic('play')}</button>
-      <button class="btn" data-shuffle>${ic('shuffle')} Shuffle all</button>
+      <button class="btn" data-shuffle>${ic('shuffle')} Shuffle${count.n !== stats.tracks ? '' : ' all'}</button>
     </div>
-    <div class="toolbar"><div class="chips">${TRACK_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="/songs?sort=${k}">${l}</a>`)}</div></div>
+    <div class="toolbar"><div class="chips">${TRACK_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="${withQuery('/songs', query, { sort: k })}">${l}</a>`)}</div></div>
+    <div class="toolbar">
+      <div class="chips">
+        <a class="chip ${query.get('favorites') ? 'active' : ''}" href="${withQuery('/songs', query, { favorites: query.get('favorites') ? null : '1' })}">${ic('heart')} Favorites</a>
+        ${[3, 4, 5].map((n) => html`<a class="chip ${minRating === n ? 'active' : ''}" href="${withQuery('/songs', query, { minRating: minRating === n ? null : n })}">${'★'.repeat(n)}${n < 5 ? '+' : ''}</a>`)}
+      </div>
+      ${genres.length ? html`<select class="input sm" data-genre aria-label="Genre"><option value="">All genres</option>
+        ${genres.map((g) => html`<option value="${g.name}" ${g.name === query.get('genre') ? 'selected' : ''}>${g.name}</option>`)}</select>` : ''}
+      ${yearInputs(query)}
+    </div>
     <div class="list"></div><div class="sentinel"></div>
   </div>`);
+  yearFilter(v, '/songs', query);
+  v.querySelector('[data-genre]')?.addEventListener('change', (e) => navigate(withQuery('/songs', query, { genre: e.target.value }), { replace: true }));
   if (!stats.tracks) { v.querySelector('.list').replaceWith(el(noLibrary())); return v; }
+  if (!count.n) { v.querySelector('.list').replaceWith(el(emptyState('music', 'No songs match', 'Try removing a filter.'))); return v; }
   const tl = trackList([]);
   v.querySelector('.list').replaceWith(tl.el);
   let offset = 0;
   const load = async () => {
-    const rows = await api.get('/tracks', { sort, limit: 150, offset });
+    const rows = await api.get('/tracks', { ...filters, limit: 150, offset });
     tl.add(rows);
     offset += rows.length;
     if (rows.length < 150) return false;
   };
   const more = (await load()) !== false;
+  const isFiltered = count.n !== stats.tracks;
   v.querySelector('[data-play]').addEventListener('click', () => player.playList(tl.tracks, 0));
-  v.querySelector('[data-shuffle]').addEventListener('click', async () => player.playList(await api.get('/tracks/random', { limit: 500 }), 0));
+  v.querySelector('[data-shuffle]').addEventListener('click', async () => {
+    if (!isFiltered) return player.playList(await api.get('/tracks/random', { limit: 500 }), 0);
+    const all = count.n <= tl.tracks.length ? tl.tracks : await api.get('/tracks', { ...filters, limit: 500, offset: 0 });
+    player.playList(all, 0, { shuffle: true });
+  });
   if (more) v._destroy = infinite(v.querySelector('.sentinel'), load);
   return v;
 }
@@ -142,7 +209,14 @@ export async function genresView() {
 
 export async function genreView({ params }) {
   const albums = await api.get('/albums', { genre: params.name, sort: 'artist', limit: 500 });
-  return el(html`<div><div class="eyebrow" style="margin-top:12px">Genre</div><h1 class="page-title">${params.name}</h1>
+  const v = el(html`<div><div class="eyebrow" style="margin-top:12px">Genre</div><h1 class="page-title">${params.name}</h1>
     <p class="page-sub">${plural(albums.length, 'album')}</p>
+    <div class="actions">
+      <button class="play-fab" data-play aria-label="Play">${ic('play')}</button>
+      ${state.user.isAdmin ? html`<button class="btn" data-organize>${ic('folder')} Organize files…</button>` : ''}
+    </div>
     <div class="grid">${albums.map(albumCard)}</div></div>`);
+  v.querySelector('[data-play]').addEventListener('click', async () => player.playList(await api.get('/tracks', { genre: params.name, sort: 'album', limit: 500 }), 0, { shuffle: true }));
+  v.querySelector('[data-organize]')?.addEventListener('click', () => organizeDialog({ type: 'genre', id: params.name, name: params.name }));
+  return v;
 }

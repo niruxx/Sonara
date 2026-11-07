@@ -5,8 +5,9 @@ import { player } from '../player.js';
 import { state, refreshPlaylists, createPlaylist } from '../state.js';
 import { navigate } from '../router.js';
 import { toast, toastError, confirmDialog, formDialog, openMenu } from '../ui.js';
-import { albumCard, artistCard, playlistCard, trackList, emptyState, playlistArt, playlistPicker } from '../components.js';
+import { albumCard, artistCard, playlistCard, trackList, emptyState, playlistArt, playlistPicker, releaseLabel } from '../components.js';
 import { setPalette } from '../theme.js';
+import { collectionFileItems } from '../fileops.js';
 
 const dot = html`<span class="dot"></span>`;
 
@@ -20,11 +21,11 @@ export async function albumView({ params }) {
     <header class="hero">
       <div class="hero-art">${art(a.cover, a.name)}</div>
       <div class="hero-info">
-        <div class="eyebrow">Album${lossless ? ' · Lossless' : ''}</div>
+        <div class="eyebrow">${releaseLabel(a.releaseType, a.compilation)}${lossless ? ' · Lossless' : ''}</div>
         <h1 class="hero-title">${a.name}</h1>
         <div class="hero-meta"><a href="/artist/${a.artistId}">${a.artist}</a>
-          ${a.year ? html`${dot}<span>${a.year}</span>` : ''}${dot}<span>${plural(a.trackCount, 'song')}, ${fmtLong(a.duration)}</span>
-          ${a.genre ? html`${dot}<a href="/genre/${encodeURIComponent(a.genre)}" style="font-weight:550">${a.genre}</a>` : ''}
+          ${a.year ? html`${dot}<span title="${a.originalYear && a.originalYear !== a.year ? `Originally released ${a.originalYear}` : ''}">${a.originalYear && a.originalYear !== a.year ? `${a.originalYear} (${a.year})` : a.year}</span>` : ''}${dot}<span>${plural(a.trackCount, 'song')}, ${fmtLong(a.duration)}</span>
+          ${(a.genres?.length ? a.genres : a.genre ? [a.genre] : []).slice(0, 3).map((g) => html`${dot}<a href="/genre/${encodeURIComponent(g)}" style="font-weight:550">${g}</a>`)}
         </div>
       </div>
     </header>
@@ -46,6 +47,7 @@ export async function albumView({ params }) {
     { icon: 'list', label: 'Add to playlist…', action: () => playlistPicker(e.target, a.tracks) },
     'sep',
     { icon: 'mic', label: 'Go to artist', action: () => navigate(`/artist/${a.artistId}`) },
+    ...collectionFileItems(a.tracks, { type: 'album', id: a.id, name: a.name }),
   ]));
   return v;
 }
@@ -61,21 +63,32 @@ export async function artistView({ params }) {
       <div class="hero-info">
         <div class="eyebrow">Artist</div>
         <h1 class="hero-title">${a.name}</h1>
-        <div class="hero-meta"><span>${plural(a.albums.length, 'album')}</span>${dot}<span>${plural(a.trackCount, 'song')}</span>${dot}<span>${fmtLong(a.duration)}</span></div>
+        <div class="hero-meta"><span>${plural(a.albumCount ?? a.albums.length, 'release')}</span>${dot}<span>${plural(a.trackCount, 'song')}</span>${dot}<span>${fmtLong(a.duration)}</span></div>
       </div>
     </header>
     <div class="actions">
       <button class="play-fab" data-play aria-label="Play">${ic('play')}</button>
       <button class="btn" data-shuffle>${ic('shuffle')} Shuffle</button>
+      ${state.user.isAdmin ? html`<button class="icon-btn lg" data-more aria-label="More">${ic('more')}</button>` : ''}
     </div>
     ${a.topTracks.length ? html`<section class="section"><div class="section-head"><h2>Popular</h2></div><div class="top"></div></section>` : ''}
-    ${a.albums.length ? html`<section class="section"><div class="section-head"><h2>Discography</h2></div><div class="grid">${a.albums.map(albumCard)}</div></section>` : ''}
+    ${a.albums.length ? html`<section class="section"><div class="section-head"><h2>Albums</h2></div><div class="grid">${a.albums.map(albumCard)}</div></section>` : ''}
+    ${a.eps?.length ? html`<section class="section"><div class="section-head"><h2>EPs &amp; singles</h2></div><div class="grid">${a.eps.map(albumCard)}</div></section>` : ''}
+    ${a.live?.length ? html`<section class="section"><div class="section-head"><h2>Live, remixes &amp; compilations</h2></div><div class="grid">${a.live.map(albumCard)}</div></section>` : ''}
     ${a.appearsOn.length ? html`<section class="section"><div class="section-head"><h2>Appears on</h2></div><div class="carousel">${a.appearsOn.map(albumCard)}</div></section>` : ''}
   </div>`);
   if (a.topTracks.length) v.querySelector('.top').replaceWith(trackList(a.topTracks, { head: false }).el);
   const all = () => api.get(`/artists/${params.id}/tracks`);
   v.querySelector('[data-play]').addEventListener('click', async () => player.playList(await all(), 0));
   v.querySelector('[data-shuffle]').addEventListener('click', async () => player.playList(await all(), 0, { shuffle: true }));
+  v.querySelector('[data-more]')?.addEventListener('click', async (e) => {
+    const at = e.currentTarget;
+    const tracks = await all();
+    openMenu(at, [
+      { icon: 'addQueue', label: 'Add to queue', action: () => player.addToQueue(tracks) },
+      ...collectionFileItems(tracks, { type: 'artist', id: a.id, name: a.name }),
+    ]);
+  });
   return v;
 }
 
@@ -149,6 +162,7 @@ export async function playlistView({ params }) {
   v.querySelector('[data-shuffle]').addEventListener('click', () => pl.tracks.length && player.playList(pl.tracks, 0, { shuffle: true }));
   v.querySelector('[data-more]').addEventListener('click', (e) => openMenu(e.currentTarget, [
     { icon: 'addQueue', label: 'Add to queue', action: () => pl.tracks.length && player.addToQueue(pl.tracks) },
+    ...(pl.tracks.length ? collectionFileItems(pl.tracks, { type: 'playlist', id: pl.id, name: pl.name }).filter((x) => x === 'sep' || x.label !== 'Move to folder…') : []),
     { icon: 'edit', label: 'Edit details', action: async () => {
       const val = await formDialog({
         title: 'Edit playlist', confirm: 'Save',

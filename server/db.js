@@ -99,6 +99,66 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_playlist_tracks ON playlist_tracks(playlist_id, position);
   `,
+
+  // 2 — richer metadata (multi-artist, multi-genre, MusicBrainz, ReplayGain,
+  // release info), artist images, ratings and server-side player state.
+  `
+  ALTER TABLE tracks ADD COLUMN original_year INTEGER;
+  ALTER TABLE tracks ADD COLUMN release_type TEXT;
+  ALTER TABLE tracks ADD COLUMN compilation INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tracks ADD COLUMN mbz_track_id TEXT;
+  ALTER TABLE tracks ADD COLUMN mbz_album_id TEXT;
+  ALTER TABLE tracks ADD COLUMN mbz_artist_id TEXT;
+  ALTER TABLE tracks ADD COLUMN rg_track_gain REAL;
+  ALTER TABLE tracks ADD COLUMN rg_track_peak REAL;
+  ALTER TABLE tracks ADD COLUMN rg_album_gain REAL;
+  ALTER TABLE tracks ADD COLUMN rg_album_peak REAL;
+  CREATE INDEX idx_tracks_year ON tracks(year);
+
+  -- Every credited artist of a track. role: 'artist' (track artists) or 'album' (album artists).
+  CREATE TABLE track_artists (
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    artist_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (track_id, role, artist_id)
+  );
+  CREATE INDEX idx_track_artists_artist ON track_artists(artist_id);
+
+  CREATE TABLE track_genres (
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    genre TEXT NOT NULL,
+    PRIMARY KEY (track_id, genre)
+  );
+  CREATE INDEX idx_track_genres_genre ON track_genres(genre);
+
+  CREATE TABLE artist_images (
+    artist_id TEXT PRIMARY KEY,
+    image TEXT NOT NULL
+  );
+
+  CREATE TABLE ratings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    rating INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, track_id)
+  );
+
+  CREATE TABLE player_state (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  -- Backfill from existing columns so the library works before the next scan...
+  INSERT INTO track_artists (track_id, artist_id, name, role, position) SELECT id, artist_id, artist, 'artist', 0 FROM tracks;
+  INSERT OR IGNORE INTO track_artists (track_id, artist_id, name, role, position) SELECT id, album_artist_id, album_artist, 'album', 0 FROM tracks;
+  INSERT INTO track_genres (track_id, genre) SELECT id, genre FROM tracks WHERE genre IS NOT NULL AND genre != '';
+  -- ...and make the next scan re-read every file to pick up the new tags.
+  UPDATE tracks SET mtime = 0;
+  `,
 ];
 
 function migrate() {

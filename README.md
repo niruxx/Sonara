@@ -6,11 +6,17 @@
 - 🌊 **Full-screen Now Playing view** with a live audio visualizer, 3D-tilt artwork and a blurred-cover backdrop.
 - 📚 **Library browsing** by albums, artists, songs and genres, with instant search.
 - ❤️ **Per-user favorites, playlists and listening history.** Playlists support drag-to-reorder.
-- 🎛️ **Queue** with play next, add to queue, shuffle, repeat and drag-to-reorder.
+- 🎛️ **Queue** with play next, add to queue, shuffle, repeat and drag-to-reorder. It's saved on the server, so you can pick up on another device.
+- 🎚️ **Gapless playback, crossfade and ReplayGain** volume normalization, a **10-band equalizer** with presets, playback speed and a sleep timer.
+- 🏷️ **Rich tags.** Multiple artists and "feat." credits, compilations, multi-genre tags, MusicBrainz IDs, original year and release type (album, EP, single, live...).
+- ⭐ **Ratings**, play counts, and sorting and filtering by year, genre, rating, plays and date added.
 - 🔐 **Multiple user accounts** with an admin role.
 - ⌨️ **Keyboard shortcuts**, plus media keys and lock-screen controls (Media Session API).
-- 🔄 **Automatic library scanning.** New, changed and removed files are picked up on a schedule.
+- 🔄 **Automatic library scanning.** Folders are watched, so changes show up within seconds, and a scheduled scan catches anything missed. Files that can't be read are listed in Settings.
 - 📱 **Works on phones.** The layout is responsive and the app can be installed as a PWA.
+
+- 🗂️ **File management (admins).** Edit tags, move files, and organize folders by artist/album, genre, year or playlist from a template you can preview first.
+- ⬇️ **Inbox.** Download audio with [yt-dlp](https://github.com/yt-dlp/yt-dlp), convert videos to audio, or upload files. Everything waits in the Inbox until you tag it and choose where it goes.
 
 It runs anywhere Node.js runs (Linux, macOS, Windows), uses an embedded SQLite database, and has **no native dependencies and no build step**.
 
@@ -64,6 +70,19 @@ Options: `-Port 7700`, `-Music "D:\Music"`, `-NoService`, `-Yes`, and `-RunAs Sy
 
 Open `http://localhost:7700` (or `http://<server-ip>:7700` from another device). The first visit asks you to **create the admin account**. Then go to **Settings → Music folders** to add or browse for folders. The scan starts right away.
 
+## Optional tools
+
+Some features use external programs. Sonara finds them on the `PATH`, and the related buttons are disabled when they're missing:
+
+| Tool | Used for | Install |
+| --- | --- | --- |
+| [ffmpeg](https://ffmpeg.org) | Editing tags, converting video to audio, extracting audio from downloads | `sudo apt install ffmpeg`, `brew install ffmpeg`, `winget install ffmpeg` |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Downloading from YouTube and other sites | `pip install yt-dlp`, `brew install yt-dlp`, `winget install yt-dlp` |
+
+To use a copy that isn't on the `PATH`, set `"ffmpegPath"` or `"ytdlpPath"` in `data/config.json`.
+
+Changing files (editing tags, moving, organizing, importing from the Inbox) is **off by default**. Turn on **Settings → File management → Allow Sonara to change files** to use it. Downloads go to `data/downloads/` unless you choose another folder there. That folder must be outside your music folders.
+
 ## Update
 
 ```bash
@@ -98,6 +117,7 @@ This removes the service or Scheduled Task, the firewall rule and `node_modules`
 | `data/config.json` | Port, music folders, scan schedule |
 | `data/covers/` | Cover art cache (rebuilt automatically by a rescan) |
 | `data/logs/sonara.log` | Server log |
+| `data/downloads/` | The Inbox: downloads and conversions waiting to be filed |
 | `data/backups/` | Database snapshots taken before each update (or with `npm run backup`) |
 
 To move the data elsewhere, set `SONARA_DATA_DIR=/path/to/data`.
@@ -113,6 +133,7 @@ Edit `data/config.json` and restart Sonara, or change most settings from the web
   "musicDirs": ["/srv/music"],
   "scanOnStartup": true,
   "scanIntervalMinutes": 60,
+  "watch": true,
   "sessionDays": 30
 }
 ```

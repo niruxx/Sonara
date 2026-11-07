@@ -27,6 +27,14 @@ const DEFAULTS = {
   musicDirs: [],
   scanOnStartup: true,
   scanIntervalMinutes: 60,
+  watch: true,
+  // Let admins edit tags and move/organize files from the web UI.
+  allowFileChanges: false,
+  // Where yt-dlp downloads and conversions land before you file them ('' = data/downloads).
+  downloadsDir: '',
+  // Optional explicit tool paths ('' = look on the PATH).
+  ffmpegPath: '',
+  ytdlpPath: '',
   sessionDays: 30,
 };
 
@@ -65,6 +73,8 @@ export function saveConfig(partial) {
   Object.assign(config, partial, envOverrides());
   return config;
 }
+
+export const downloadsDir = () => path.resolve(config.downloadsDir || path.join(DATA_DIR, 'downloads'));
 
 // Write a config file on first run so users have something to edit.
 if (!fs.existsSync(CONFIG_FILE)) saveConfig({ ...DEFAULTS, ...fileConfig });

@@ -4,7 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { q, tx } from './db.js';
 import { COVERS_DIR, getConfig, saveConfig } from './config.js';
-import { scanLibrary, scanStatus, scheduleScans } from './scanner.js';
+import { scanLibrary, scanStatus, scheduleScans, watchLibrary } from './scanner.js';
+import { tools } from './tools.js';
+import {
+  assertFileChangesAllowed, assertInLibrary, editTracks, EDITABLE_TAGS, planMoves, applyMoves, scopeTracks,
+  TEMPLATES, validateTemplate, writeTags, musicRoots,
+} from './files.js';
+import {
+  listInbox, inboxDir, inboxPath, listJobs, queueDownload, queueConvert, cancelJob, clearFinishedJobs,
+  saveUpload, importToLibrary, AUDIO_FORMATS, CONVERT_FORMATS, VIDEO_EXT,
+} from './downloads.js';
 import {
   createSession, destroySession, hashPassword, loginRateLimit, publicUser, requireAdmin, requireAuth,
   setSessionCookie, userCount, validateCredentials, verifyPassword, COOKIE,
@@ -24,21 +33,43 @@ const page = (req, def = 100) => ({ limit: int(req.query.limit, def, 1, 500), of
 const TRACK_COLS = `
   t.id, t.title, t.artist, t.artist_id AS artistId, t.album, t.album_id AS albumId,
   t.album_artist AS albumArtist, t.album_artist_id AS albumArtistId, t.track_no AS trackNo,
-  t.disc_no AS discNo, t.year, t.genre, t.duration, t.bitrate, t.sample_rate AS sampleRate,
-  t.codec, t.lossless, t.cover, t.added_at AS addedAt,
-  (f.track_id IS NOT NULL) AS favorite`;
-const TRACK_FROM = `FROM tracks t LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = $uid`;
+  t.disc_no AS discNo, t.year, t.original_year AS originalYear, t.genre, t.duration, t.bitrate,
+  t.sample_rate AS sampleRate, t.codec, t.lossless, t.cover, t.added_at AS addedAt,
+  t.release_type AS releaseType, t.compilation,
+  t.rg_track_gain AS rgTrackGain, t.rg_track_peak AS rgTrackPeak, t.rg_album_gain AS rgAlbumGain, t.rg_album_peak AS rgAlbumPeak,
+  (f.track_id IS NOT NULL) AS favorite, COALESCE(r.rating, 0) AS rating,
+  COALESCE(pc.n, 0) AS playCount, pc.last AS lastPlayed,
+  (SELECT json_group_array(json_array(ta.artist_id, ta.name, ta.position)) FROM track_artists ta
+    WHERE ta.track_id = t.id AND ta.role = 'artist') AS artists`;
+// Per-user joins every track query needs (bind $uid).
+const TRACK_JOINS = `
+  LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = $uid
+  LEFT JOIN ratings r ON r.track_id = t.id AND r.user_id = $uid
+  LEFT JOIN (SELECT track_id, COUNT(*) AS n, MAX(played_at) AS last FROM plays WHERE user_id = $uid GROUP BY track_id) pc
+    ON pc.track_id = t.id`;
+const TRACK_FROM = `FROM tracks t ${TRACK_JOINS}`;
 
 const ALBUM_COLS = `
   t.album_id AS id, MAX(t.album) AS name, MAX(t.album_artist) AS artist, t.album_artist_id AS artistId,
-  MAX(t.year) AS year, MAX(t.cover) AS cover, COUNT(*) AS trackCount, SUM(t.duration) AS duration,
-  MAX(t.added_at) AS addedAt, MAX(t.genre) AS genre`;
+  MAX(t.year) AS year, MIN(t.original_year) AS originalYear, MAX(t.cover) AS cover, COUNT(*) AS trackCount,
+  SUM(t.duration) AS duration, MAX(t.added_at) AS addedAt, MAX(t.genre) AS genre,
+  MAX(t.release_type) AS releaseType, MAX(t.compilation) AS compilation, COUNT(DISTINCT COALESCE(t.disc_no, 1)) AS discCount`;
+// Album queries that sort/filter on the user's activity add these (bind $uid).
+const ALBUM_USER_COLS = `, COALESCE(SUM(pc.n), 0) AS playCount, MAX(pc.last) AS lastPlayed, AVG(r.rating) AS rating`;
+const ALBUM_USER_JOINS = `
+  LEFT JOIN ratings r ON r.track_id = t.id AND r.user_id = $uid
+  LEFT JOIN (SELECT track_id, COUNT(*) AS n, MAX(played_at) AS last FROM plays WHERE user_id = $uid GROUP BY track_id) pc
+    ON pc.track_id = t.id`;
 
 const ALBUM_SORTS = {
   name: 'name COLLATE NOCASE ASC',
   artist: 'artist COLLATE NOCASE ASC, year ASC',
   year: 'year DESC, name COLLATE NOCASE',
+  oldest: 'year IS NULL, year ASC, name COLLATE NOCASE',
   recent: 'addedAt DESC',
+  played: 'playCount DESC, lastPlayed DESC',
+  lastPlayed: 'lastPlayed IS NULL, lastPlayed DESC',
+  rating: 'rating IS NULL, rating DESC, name COLLATE NOCASE',
   random: 'RANDOM()',
 };
 const TRACK_SORTS = {
@@ -48,10 +79,48 @@ const TRACK_SORTS = {
   recent: 't.added_at DESC, t.album_id, t.disc_no, t.track_no',
   year: 't.year DESC, t.album_id, t.disc_no, t.track_no',
   duration: 't.duration DESC',
+  played: 'playCount DESC, lastPlayed DESC',
+  lastPlayed: 'lastPlayed IS NULL, lastPlayed DESC',
+  rating: 'rating DESC, t.title COLLATE NOCASE',
 };
+const RELEASE_TYPES = new Set(['album', 'ep', 'single', 'compilation', 'live', 'soundtrack', 'remix', 'other']);
 
-const fixTrack = (t) => t && { ...t, favorite: !!t.favorite, lossless: !!t.lossless };
+/** Shared WHERE clauses for ?genre, ?yearFrom, ?yearTo, ?type (and, for tracks, ?minRating, ?favorites). */
+function libraryFilters(query, { trackLevel = false } = {}) {
+  const where = [];
+  const params = {};
+  if (query.genre) {
+    where.push('t.id IN (SELECT track_id FROM track_genres WHERE genre = $genre)');
+    params.genre = String(query.genre);
+  }
+  const from = int(query.yearFrom, null, 0, 9999);
+  const to = int(query.yearTo, null, 0, 9999);
+  if (from != null) { where.push('t.year >= $yearFrom'); params.yearFrom = from; }
+  if (to != null) { where.push('t.year <= $yearTo'); params.yearTo = to; }
+  if (query.type && RELEASE_TYPES.has(query.type)) {
+    if (query.type === 'compilation') where.push(`(t.compilation = 1 OR t.release_type = 'compilation')`);
+    else if (query.type === 'album') where.push(`(t.release_type IS NULL OR t.release_type = 'album') AND t.compilation = 0`);
+    else { where.push('t.release_type = $type'); params.type = query.type; }
+  }
+  if (trackLevel) {
+    const minRating = int(query.minRating, 0, 0, 5);
+    if (minRating) { where.push('r.rating >= $minRating'); params.minRating = minRating; }
+    if (query.favorites === '1' || query.favorites === 'true') where.push('f.track_id IS NOT NULL');
+  }
+  return { where: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
+}
+
+const fixTrack = (t) => {
+  if (!t) return t;
+  let artists = [];
+  try {
+    artists = JSON.parse(t.artists || '[]').sort((a, b) => a[2] - b[2]).map(([id, name]) => ({ id, name }));
+  } catch { /* ignore */ }
+  if (!artists.length) artists = [{ id: t.artistId, name: t.artist }];
+  return { ...t, artists, favorite: !!t.favorite, lossless: !!t.lossless, compilation: !!t.compilation };
+};
 const tracks = (rows) => rows.map(fixTrack);
+const idParam = (v) => int(v, 0, 0, Number.MAX_SAFE_INTEGER);
 
 // ───────────────────────── Auth ─────────────────────────
 
@@ -101,6 +170,36 @@ api.put('/me/password', (req, res) => {
   res.json({ ok: true });
 });
 
+// Playback state (queue, position, volume...) so listening can resume on another device.
+api.get('/me/player', (req, res) => {
+  const row = q('SELECT state, updated_at FROM player_state WHERE user_id = ?').get(req.user.id);
+  if (!row) return res.json({ state: null, updatedAt: 0 });
+  let state = null;
+  try { state = JSON.parse(row.state); } catch { /* ignore */ }
+  res.json({ state, updatedAt: row.updated_at });
+});
+
+api.put('/me/player', express.json({ limit: '512kb' }), (req, res) => {
+  const b = req.body || {};
+  const ids = Array.isArray(b.queue) ? b.queue.map(idParam).filter(Boolean).slice(0, 5000) : [];
+  const state = {
+    queue: ids,
+    original: Array.isArray(b.original) ? b.original.map((n) => int(n, -1, -1, 5000)).slice(0, 5000) : [],
+    index: int(b.index, 0, 0, 5000),
+    time: Math.max(0, Number(b.time) || 0),
+    shuffle: !!b.shuffle,
+    repeat: ['off', 'all', 'one'].includes(b.repeat) ? b.repeat : 'off',
+    volume: Math.min(1, Math.max(0, Number(b.volume ?? 0.8))),
+    muted: !!b.muted,
+    rate: Math.min(4, Math.max(0.25, Number(b.rate) || 1)),
+    device: String(b.device || '').slice(0, 80),
+  };
+  const now = Date.now();
+  q(`INSERT INTO player_state (user_id, state, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`).run(req.user.id, JSON.stringify(state), now);
+  res.json({ ok: true, updatedAt: now });
+});
+
 // ───────────────────────── Library ─────────────────────────
 
 api.get('/stats', (req, res) => {
@@ -117,14 +216,16 @@ api.get('/home', (req, res) => {
     recentlyAdded: q(`SELECT ${ALBUM_COLS} FROM tracks t GROUP BY t.album_id ORDER BY addedAt DESC LIMIT 12`).all(),
     discover: q(`SELECT ${ALBUM_COLS} FROM tracks t WHERE t.album_id IN
       (SELECT album_id FROM tracks GROUP BY album_id ORDER BY RANDOM() LIMIT 12) GROUP BY t.album_id`).all(),
-    recentlyPlayed: tracks(q(`SELECT ${TRACK_COLS}, MAX(p.played_at) AS playedAt FROM plays p
-      JOIN tracks t ON t.id = p.track_id LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = $uid
-      WHERE p.user_id = $uid GROUP BY t.id ORDER BY playedAt DESC LIMIT 12`).all({ uid })),
-    mostPlayed: tracks(q(`SELECT ${TRACK_COLS}, COUNT(p.id) AS plays FROM plays p
-      JOIN tracks t ON t.id = p.track_id LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = $uid
-      WHERE p.user_id = $uid GROUP BY t.id ORDER BY plays DESC LIMIT 10`).all({ uid })),
-    topArtists: q(`SELECT t.album_artist_id AS id, MAX(t.album_artist) AS name, MAX(t.cover) AS cover, COUNT(p.id) AS plays
-      FROM plays p JOIN tracks t ON t.id = p.track_id WHERE p.user_id = ? GROUP BY t.album_artist_id
+    recentlyPlayed: tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE pc.last IS NOT NULL
+      ORDER BY pc.last DESC LIMIT 12`).all({ uid })),
+    recentAlbums: q(`SELECT ${ALBUM_COLS} ${ALBUM_USER_COLS} FROM tracks t ${ALBUM_USER_JOINS}
+      GROUP BY t.album_id HAVING lastPlayed IS NOT NULL ORDER BY lastPlayed DESC LIMIT 12`).all({ uid }),
+    mostPlayed: tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE pc.n > 0
+      ORDER BY pc.n DESC, pc.last DESC LIMIT 10`).all({ uid })),
+    topArtists: q(`SELECT ta.artist_id AS id, MAX(ta.name) AS name,
+      COALESCE((SELECT image FROM artist_images WHERE artist_id = ta.artist_id), MAX(t.cover)) AS cover, COUNT(p.id) AS plays
+      FROM plays p JOIN tracks t ON t.id = p.track_id JOIN track_artists ta ON ta.track_id = t.id AND ta.role = 'artist'
+      WHERE p.user_id = ? GROUP BY ta.artist_id
       ORDER BY plays DESC LIMIT 8`).all(uid),
   });
 });
@@ -132,10 +233,20 @@ api.get('/home', (req, res) => {
 api.get('/albums', (req, res) => {
   const { limit, offset } = page(req, 60);
   const order = ALBUM_SORTS[req.query.sort] || ALBUM_SORTS.name;
-  const genre = req.query.genre;
-  const where = genre ? 'WHERE t.genre = $genre' : '';
-  res.json(q(`SELECT ${ALBUM_COLS} FROM tracks t ${where} GROUP BY t.album_id ORDER BY ${order} LIMIT $limit OFFSET $offset`)
-    .all({ limit, offset, ...(genre ? { genre } : {}) }));
+  const { where, params } = libraryFilters(req.query);
+  const having = req.query.sort === 'played' ? 'HAVING playCount > 0' : req.query.sort === 'rating' ? 'HAVING rating IS NOT NULL' : '';
+  res.json(q(`SELECT ${ALBUM_COLS} ${ALBUM_USER_COLS} FROM tracks t ${ALBUM_USER_JOINS} ${where}
+    GROUP BY t.album_id ${having} ORDER BY ${order} LIMIT $limit OFFSET $offset`)
+    .all({ uid: req.user.id, limit, offset, ...params }));
+});
+
+/** Years and release types present in the library, for the filter UI. */
+api.get('/albums/facets', (_req, res) => {
+  res.json({
+    years: q('SELECT MIN(year) AS min, MAX(year) AS max FROM tracks WHERE year > 0').get(),
+    types: q(`SELECT CASE WHEN compilation = 1 THEN 'compilation' ELSE COALESCE(release_type, 'album') END AS type,
+      COUNT(DISTINCT album_id) AS n FROM tracks GROUP BY type ORDER BY n DESC`).all(),
+  });
 });
 
 api.get('/albums/:id', (req, res) => {
@@ -143,45 +254,79 @@ api.get('/albums/:id', (req, res) => {
   if (!album) return res.status(404).json({ error: 'Album not found' });
   album.tracks = tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE t.album_id = $id
     ORDER BY COALESCE(t.disc_no, 1), COALESCE(t.track_no, 9999), t.title COLLATE NOCASE`).all({ uid: req.user.id, id: req.params.id }));
+  album.genres = q(`SELECT g.genre AS name, COUNT(*) AS n FROM track_genres g JOIN tracks t ON t.id = g.track_id
+    WHERE t.album_id = ? GROUP BY g.genre ORDER BY n DESC LIMIT 6`).all(album.id).map((g) => g.name);
   album.more = q(`SELECT ${ALBUM_COLS} FROM tracks t WHERE t.album_artist_id = ? AND t.album_id != ?
     GROUP BY t.album_id ORDER BY year DESC LIMIT 12`).all(album.artistId, album.id);
   res.json(album);
 });
 
+const ARTIST_IMAGE = (idExpr, fallback) => `COALESCE((SELECT image FROM artist_images WHERE artist_id = ${idExpr}), ${fallback})`;
+
 api.get('/artists', (req, res) => {
   const { limit, offset } = page(req, 100);
-  res.json(q(`SELECT t.album_artist_id AS id, MAX(t.album_artist) AS name, MAX(t.cover) AS cover,
+  res.json(q(`SELECT t.album_artist_id AS id, MAX(t.album_artist) AS name, ${ARTIST_IMAGE('t.album_artist_id', 'MAX(t.cover)')} AS cover,
     COUNT(DISTINCT t.album_id) AS albumCount, COUNT(*) AS trackCount
     FROM tracks t GROUP BY t.album_artist_id ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?`).all(limit, offset));
 });
 
 api.get('/artists/:id', (req, res) => {
   const id = req.params.id;
-  const artist = q(`SELECT album_artist_id AS id, MAX(album_artist) AS name, MAX(cover) AS cover,
+  const artist = q(`SELECT album_artist_id AS id, MAX(album_artist) AS name, ${ARTIST_IMAGE('album_artist_id', 'MAX(cover)')} AS cover,
     COUNT(DISTINCT album_id) AS albumCount, COUNT(*) AS trackCount, SUM(duration) AS duration
     FROM tracks WHERE album_artist_id = ? GROUP BY album_artist_id`).get(id)
-    || q(`SELECT artist_id AS id, MAX(artist) AS name, MAX(cover) AS cover, 0 AS albumCount, COUNT(*) AS trackCount,
-      SUM(duration) AS duration FROM tracks WHERE artist_id = ? GROUP BY artist_id`).get(id);
+    || q(`SELECT ta.artist_id AS id, MAX(ta.name) AS name, ${ARTIST_IMAGE('ta.artist_id', 'MAX(t.cover)')} AS cover, 0 AS albumCount,
+      COUNT(*) AS trackCount, SUM(t.duration) AS duration FROM track_artists ta JOIN tracks t ON t.id = ta.track_id
+      WHERE ta.artist_id = ? AND ta.role = 'artist' GROUP BY ta.artist_id`).get(id);
   if (!artist) return res.status(404).json({ error: 'Artist not found' });
-  artist.albums = q(`SELECT ${ALBUM_COLS} FROM tracks t WHERE t.album_artist_id = ? GROUP BY t.album_id ORDER BY year DESC`).all(id);
+  const albums = q(`SELECT ${ALBUM_COLS} FROM tracks t WHERE t.album_id IN
+    (SELECT t2.album_id FROM track_artists ta JOIN tracks t2 ON t2.id = ta.track_id WHERE ta.artist_id = ? AND ta.role = 'album')
+    GROUP BY t.album_id ORDER BY year DESC`).all(id);
+  // Group the discography by release type, like most players do.
+  const kind = (a) => (a.compilation ? 'compilation' : a.releaseType || 'album');
+  artist.albums = albums.filter((a) => ['album', 'soundtrack', 'other'].includes(kind(a)));
+  artist.eps = albums.filter((a) => ['ep', 'single'].includes(kind(a)));
+  artist.live = albums.filter((a) => ['live', 'remix', 'compilation'].includes(kind(a)));
+  artist.albumCount = albums.length;
   artist.appearsOn = q(`SELECT ${ALBUM_COLS} FROM tracks t WHERE t.album_id IN
-    (SELECT album_id FROM tracks WHERE artist_id = ? AND album_artist_id != ?) GROUP BY t.album_id ORDER BY year DESC`).all(id, id);
+    (SELECT t2.album_id FROM track_artists ta JOIN tracks t2 ON t2.id = ta.track_id WHERE ta.artist_id = $id AND ta.role = 'artist')
+    AND t.album_id NOT IN (SELECT t3.album_id FROM track_artists tb JOIN tracks t3 ON t3.id = tb.track_id WHERE tb.artist_id = $id AND tb.role = 'album')
+    GROUP BY t.album_id ORDER BY year DESC`).all({ id });
   artist.topTracks = tracks(q(`SELECT ${TRACK_COLS}, (SELECT COUNT(*) FROM plays p WHERE p.track_id = t.id) AS plays
-    ${TRACK_FROM} WHERE t.album_artist_id = $id OR t.artist_id = $id ORDER BY plays DESC, RANDOM() LIMIT 10`)
-    .all({ uid: req.user.id, id }));
+    ${TRACK_FROM} WHERE t.id IN (SELECT track_id FROM track_artists WHERE artist_id = $id)
+    ORDER BY plays DESC, rating DESC, RANDOM() LIMIT 10`).all({ uid: req.user.id, id }));
   res.json(artist);
 });
 
 api.get('/artists/:id/tracks', (req, res) => {
-  res.json(tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE t.album_artist_id = $id OR t.artist_id = $id
+  res.json(tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE t.id IN (SELECT track_id FROM track_artists WHERE artist_id = $id)
     ORDER BY t.year, t.album_id, t.disc_no, t.track_no`).all({ uid: req.user.id, id: req.params.id })));
 });
 
 api.get('/tracks', (req, res) => {
   const { limit, offset } = page(req, 100);
   const order = TRACK_SORTS[req.query.sort] || TRACK_SORTS.title;
-  res.json(tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} ORDER BY ${order} LIMIT $limit OFFSET $offset`)
-    .all({ uid: req.user.id, limit, offset })));
+  const { where, params } = libraryFilters(req.query, { trackLevel: true });
+  const playedOnly = req.query.sort === 'played' || req.query.sort === 'lastPlayed';
+  const w = playedOnly ? (where ? `${where} AND pc.n > 0` : 'WHERE pc.n > 0') : where;
+  res.json(tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} ${w} ORDER BY ${order} LIMIT $limit OFFSET $offset`)
+    .all({ uid: req.user.id, limit, offset, ...params })));
+});
+
+/** Count for the current filters (Songs page header). */
+api.get('/tracks/count', (req, res) => {
+  const { where, params } = libraryFilters(req.query, { trackLevel: true });
+  res.json(q(`SELECT COUNT(*) AS n, COALESCE(SUM(t.duration), 0) AS duration ${TRACK_FROM} ${where}`).get({ uid: req.user.id, ...params }));
+});
+
+/** Tracks by id, in the order given (used to restore a saved queue). */
+api.post('/tracks/lookup', (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(idParam).filter(Boolean).slice(0, 5000) : [];
+  if (!ids.length) return res.json([]);
+  const rows = tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE t.id IN (SELECT value FROM json_each($ids))`)
+    .all({ uid: req.user.id, ids: JSON.stringify(ids) }));
+  const byId = new Map(rows.map((t) => [t.id, t]));
+  res.json(ids.map((id) => byId.get(id) || null));
 });
 
 api.get('/tracks/random', (req, res) => {
@@ -190,8 +335,8 @@ api.get('/tracks/random', (req, res) => {
 });
 
 api.get('/genres', (_req, res) => {
-  res.json(q(`SELECT genre AS name, COUNT(*) AS trackCount, COUNT(DISTINCT album_id) AS albumCount, MAX(cover) AS cover
-    FROM tracks WHERE genre IS NOT NULL AND genre != '' GROUP BY genre ORDER BY trackCount DESC`).all());
+  res.json(q(`SELECT g.genre AS name, COUNT(*) AS trackCount, COUNT(DISTINCT t.album_id) AS albumCount, MAX(t.cover) AS cover
+    FROM track_genres g JOIN tracks t ON t.id = g.track_id GROUP BY g.genre ORDER BY trackCount DESC`).all());
 });
 
 api.get('/search', (req, res) => {
@@ -199,13 +344,40 @@ api.get('/search', (req, res) => {
   if (!term) return res.json({ tracks: [], albums: [], artists: [] });
   const like = `%${term.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
   res.json({
-    artists: q(`SELECT album_artist_id AS id, MAX(album_artist) AS name, MAX(cover) AS cover, COUNT(DISTINCT album_id) AS albumCount
-      FROM tracks WHERE album_artist LIKE ? ESCAPE '\\' GROUP BY album_artist_id ORDER BY COUNT(*) DESC LIMIT 8`).all(like),
+    artists: q(`SELECT ta.artist_id AS id, MAX(ta.name) AS name, ${ARTIST_IMAGE('ta.artist_id', 'MAX(t.cover)')} AS cover,
+      COUNT(DISTINCT t.album_id) AS albumCount FROM track_artists ta JOIN tracks t ON t.id = ta.track_id
+      WHERE ta.name LIKE ? ESCAPE '\\' GROUP BY ta.artist_id ORDER BY COUNT(*) DESC LIMIT 8`).all(like),
     albums: q(`SELECT ${ALBUM_COLS} FROM tracks t WHERE t.album LIKE ? ESCAPE '\\' GROUP BY t.album_id LIMIT 12`).all(like),
     tracks: tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE t.title LIKE $like ESCAPE '\\'
       OR t.artist LIKE $like ESCAPE '\\' OR t.album LIKE $like ESCAPE '\\'
       ORDER BY (t.title LIKE $like ESCAPE '\\') DESC, t.title COLLATE NOCASE LIMIT 50`).all({ uid: req.user.id, like })),
   });
+});
+
+api.get('/tracks/:id', (req, res) => {
+  const t = fixTrack(q(`SELECT ${TRACK_COLS}, t.path, t.size, t.mtime, t.mbz_track_id AS mbzTrackId, t.mbz_album_id AS mbzAlbumId,
+    t.mbz_artist_id AS mbzArtistId ${TRACK_FROM} WHERE t.id = $id`).get({ uid: req.user.id, id: idParam(req.params.id) }));
+  if (!t) return res.status(404).json({ error: 'Track not found' });
+  t.genres = q('SELECT genre FROM track_genres WHERE track_id = ?').all(t.id).map((g) => g.genre);
+  t.albumArtists = q(`SELECT artist_id AS id, name FROM track_artists WHERE track_id = ? AND role = 'album' ORDER BY position`).all(t.id);
+  t.format = path.extname(t.path).slice(1).toUpperCase();
+  // Only admins get to see where files live on the server.
+  if (req.user.is_admin) t.file = t.path;
+  delete t.path;
+  res.json(t);
+});
+
+api.put('/ratings/:id', (req, res) => {
+  const id = idParam(req.params.id);
+  const rating = int(req.body?.rating, 0, 0, 5);
+  if (!q('SELECT 1 FROM tracks WHERE id = ?').get(id)) return res.status(404).json({ error: 'Track not found' });
+  if (rating) {
+    q(`INSERT INTO ratings (user_id, track_id, rating, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, track_id) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at`).run(req.user.id, id, rating, Date.now());
+  } else {
+    q('DELETE FROM ratings WHERE user_id = ? AND track_id = ?').run(req.user.id, id);
+  }
+  res.json({ rating });
 });
 
 // ───────────────────────── Media ─────────────────────────
@@ -241,8 +413,8 @@ api.post('/tracks/:id/play', (req, res) => {
 // ───────────────────────── Favorites ─────────────────────────
 
 api.get('/favorites', (req, res) => {
-  res.json(tracks(q(`SELECT ${TRACK_COLS} FROM favorites f JOIN tracks t ON t.id = f.track_id
-    WHERE f.user_id = $uid ORDER BY f.created_at DESC`).all({ uid: req.user.id })));
+  res.json(tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE f.track_id IS NOT NULL
+    ORDER BY f.created_at DESC`).all({ uid: req.user.id })));
 });
 
 api.put('/favorites/:id', (req, res) => {
@@ -295,7 +467,7 @@ api.get('/playlists/:id', (req, res) => {
   if (!pl) return;
   pl.covers = playlistCovers(pl.id);
   pl.tracks = tracks(q(`SELECT ${TRACK_COLS}, pt.id AS entryId FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-    LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = $uid WHERE pt.playlist_id = $pid ORDER BY pt.position`)
+    ${TRACK_JOINS} WHERE pt.playlist_id = $pid ORDER BY pt.position`)
     .all({ uid: req.user.id, pid: pl.id }));
   res.json(pl);
 });
@@ -405,6 +577,9 @@ admin.get('/settings', (_req, res) => {
     musicDirs: c.musicDirs.map((d) => ({ path: d, exists: fs.existsSync(d) })),
     scanIntervalMinutes: c.scanIntervalMinutes,
     scanOnStartup: c.scanOnStartup,
+    watch: c.watch !== false,
+    allowFileChanges: !!c.allowFileChanges,
+    downloadsDir: inboxDir(),
     port: c.port,
     platform: process.platform,
     node: process.version,
@@ -422,8 +597,20 @@ admin.put('/settings', (req, res) => {
   }
   if (req.body?.scanIntervalMinutes != null) patch.scanIntervalMinutes = int(req.body.scanIntervalMinutes, 60, 0, 60 * 24 * 7);
   if (req.body?.scanOnStartup != null) patch.scanOnStartup = !!req.body.scanOnStartup;
+  if (req.body?.watch != null) patch.watch = !!req.body.watch;
+  if (req.body?.allowFileChanges != null) patch.allowFileChanges = !!req.body.allowFileChanges;
+  if (req.body?.downloadsDir != null) {
+    const d = String(req.body.downloadsDir).trim();
+    if (d) {
+      const abs = path.resolve(d);
+      try { fs.mkdirSync(abs, { recursive: true }); } catch (err) { return res.status(400).json({ error: `Cannot use that folder: ${err.code || err.message}` }); }
+      if (musicRoots().some((r) => abs === r || abs.startsWith(r + path.sep))) return res.status(400).json({ error: 'The downloads folder must be outside your music folders, or files would show up in the library before you file them.' });
+      patch.downloadsDir = abs;
+    } else patch.downloadsDir = '';
+  }
   saveConfig(patch);
   scheduleScans();
+  if (patch.musicDirs || patch.watch != null) watchLibrary();
   res.json({ ok: true });
 });
 
@@ -445,12 +632,20 @@ admin.get('/browse', (req, res) => {
   }
   const dir = path.resolve(requested);
   try {
-    const dirs = fs.readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && !e.name.startsWith('.') && !e.name.startsWith('$'))
-      .map((e) => ({ name: e.name, path: path.join(dir, e.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith('.') && !e.name.startsWith('$'));
+    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    const dirs = entries.filter((e) => e.isDirectory()).map((e) => ({ name: e.name, path: path.join(dir, e.name) })).sort(byName);
     const parent = path.dirname(dir);
-    res.json({ path: dir, parent: parent === dir ? '' : parent, dirs });
+    const out = { path: dir, parent: parent === dir ? '' : parent, dirs };
+    // ?files=video|audio|all also lists files (for the converter's file picker).
+    if (req.query.files) {
+      const want = String(req.query.files);
+      out.files = entries.filter((e) => e.isFile()).filter((e) => {
+        const ext = path.extname(e.name).toLowerCase();
+        return want === 'all' || (want === 'video' ? VIDEO_EXT.has(ext) : true);
+      }).map((e) => ({ name: e.name, path: path.join(dir, e.name) })).sort(byName).slice(0, 2000);
+    }
+    res.json(out);
   } catch (err) {
     res.status(400).json({ error: `Cannot open folder: ${err.code || err.message}` });
   }
@@ -462,6 +657,175 @@ admin.post('/scan', (req, res) => {
   res.json(scanStatus());
 });
 
-admin.get('/scan', (_req, res) => res.json(scanStatus()));
+admin.get('/scan', (req, res) => res.json(scanStatus({ issues: req.query.issues === '1' })));
+
+// ───────────────────────── Files: tags, moving, organizing ─────────────────────────
+
+/** Wrap async admin handlers: errors with .status become JSON responses. */
+const h = (fn) => async (req, res) => {
+  try { await fn(req, res); } catch (err) {
+    if (!err.status) console.error(err);
+    if (!res.headersSent) res.status(err.status || 500).json({ error: err.message || 'Something went wrong' });
+  }
+};
+const idList = (v) => (Array.isArray(v) ? v.map(idParam).filter(Boolean).slice(0, 20000) : []);
+
+admin.get('/tools', h(async (req, res) => {
+  res.json({ ...(await tools(req.query.refresh === '1')), allowFileChanges: !!getConfig().allowFileChanges });
+}));
+
+/** Clean incoming tag edits: only known keys; '' clears; numbers validated. */
+function cleanTags(body) {
+  const tags = {};
+  for (const k of EDITABLE_TAGS) {
+    if (!(k in (body || {}))) continue;
+    let v = body[k];
+    if (v === null || v === '') { tags[k] = null; continue; }
+    if (['trackNo', 'discNo', 'year'].includes(k)) {
+      v = int(v, null, 0, 9999);
+      if (v == null) continue;
+    }
+    tags[k] = String(v).trim();
+  }
+  return tags;
+}
+
+// Body: { ids: [...], tags: { title?, artist?, album?, albumArtist?, trackNo?, discNo?, year?, genre?, composer?, comment? } }
+admin.post('/tracks/tags', h(async (req, res) => {
+  assertFileChangesAllowed();
+  const ids = idList(req.body?.ids);
+  const tags = cleanTags(req.body?.tags);
+  if (!ids.length) return res.status(400).json({ error: 'No tracks selected' });
+  if (!Object.keys(tags).length) return res.status(400).json({ error: 'Nothing to change' });
+  if (ids.length > 1 && 'title' in tags) delete tags.title; // never give a whole album the same title
+  res.json(await editTracks(ids, tags));
+}));
+
+// Body: { ids: [...], dir } — move files into one folder, keeping their names.
+admin.post('/tracks/move', h(async (req, res) => {
+  assertFileChangesAllowed();
+  const dir = String(req.body?.dir || '').trim();
+  if (!dir) return res.status(400).json({ error: 'Choose a destination folder' });
+  assertInLibrary(dir);
+  const rows = scopeTracks({ type: 'tracks', ids: idList(req.body?.ids) });
+  const plan = await planMoves(rows, { dir });
+  res.json(await applyMoves(plan, { mode: 'move' }));
+}));
+
+admin.get('/organize/templates', (_req, res) => res.json({ templates: TEMPLATES, roots: musicRoots() }));
+
+// Body: { scope: { type, id?, ids? }, template, root?, mode: 'move'|'copy', dest?, dryRun }
+admin.post('/organize', h(async (req, res) => {
+  const b = req.body || {};
+  const template = String(b.template || '').trim();
+  const problem = validateTemplate(template);
+  if (problem) return res.status(400).json({ error: problem });
+  const mode = b.mode === 'copy' ? 'copy' : 'move';
+  // Moves stay inside the library; copies (e.g. exporting a playlist to a USB stick) may go anywhere.
+  const root = b.root ? path.resolve(String(b.root)) : null;
+  if (root && mode === 'move') assertInLibrary(root);
+  if (!root && mode === 'copy') return res.status(400).json({ error: 'Choose where to copy the files to' });
+  const rows = scopeTracks(b.scope);
+  if (!rows.length) return res.status(400).json({ error: 'No songs in that selection' });
+  let playlist = null;
+  if (b.scope?.type === 'playlist') playlist = q('SELECT name FROM playlists WHERE id = ?').get(idParam(b.scope.id))?.name;
+  const plan = await planMoves(rows, { template, root, playlist });
+  if (b.dryRun) {
+    return res.json({ total: rows.length, changes: plan.length, unchanged: rows.length - plan.length, preview: plan.slice(0, 300).map((m) => ({ from: m.from, to: m.to })) });
+  }
+  assertFileChangesAllowed();
+  res.json(await applyMoves(plan, { mode }));
+}));
+
+// ───────────────────────── Inbox: downloads & conversions ─────────────────────────
+
+admin.get('/inbox', h(async (_req, res) => {
+  res.json({ dir: inboxDir(), files: await listInbox(), jobs: listJobs(), tools: await tools(), formats: AUDIO_FORMATS, convertFormats: Object.keys(CONVERT_FORMATS) });
+}));
+
+admin.get('/inbox/jobs', (_req, res) => res.json(listJobs()));
+
+admin.get('/inbox/file/:name', h(async (req, res) => {
+  const file = inboxPath(req.params.name);
+  res.sendFile(file, { dotfiles: 'deny', acceptRanges: true }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'File not found' });
+  });
+}));
+
+admin.put('/inbox/tags/:name', h(async (req, res) => {
+  const file = inboxPath(req.params.name);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'File not found' });
+  const tags = cleanTags(req.body?.tags);
+  if (!Object.keys(tags).length) return res.status(400).json({ error: 'Nothing to change' });
+  await writeTags(file, tags);
+  res.json({ ok: true });
+}));
+
+admin.put('/inbox/rename/:name', h(async (req, res) => {
+  const from = inboxPath(req.params.name);
+  const ext = path.extname(from);
+  let to = String(req.body?.name || '').trim();
+  if (!to) return res.status(400).json({ error: 'Enter a name' });
+  if (!to.toLowerCase().endsWith(ext.toLowerCase())) to += ext;
+  const target = inboxPath(to.replace(/[\\/:*?"<>|]/g, '_'));
+  if (fs.existsSync(target)) return res.status(409).json({ error: 'A file with that name already exists' });
+  fs.renameSync(from, target);
+  res.json({ name: path.basename(target) });
+}));
+
+admin.delete('/inbox/:name', h(async (req, res) => {
+  fs.rmSync(inboxPath(req.params.name), { force: true });
+  res.json({ ok: true });
+}));
+
+admin.post('/inbox/download', h(async (req, res) => {
+  const urls = String(req.body?.url || '').split(/\s+/).filter(Boolean).slice(0, 50);
+  if (!urls.length) return res.status(400).json({ error: 'Paste a link' });
+  const jobs = [];
+  for (const url of urls) jobs.push(await queueDownload(url, { format: req.body?.format, playlist: !!req.body?.playlist, embedThumbnail: req.body?.embedThumbnail !== false }));
+  res.json({ jobs });
+}));
+
+// Body: { name } (an Inbox file) or { path } (any file on the server), plus { format, bitrate, deleteSource, cover }
+admin.post('/inbox/convert', h(async (req, res) => {
+  const b = req.body || {};
+  const source = b.name ? inboxPath(b.name) : path.resolve(String(b.path || ''));
+  if (!b.name && !b.path) return res.status(400).json({ error: 'Choose a file to convert' });
+  if (!fs.existsSync(source) || !fs.statSync(source).isFile()) return res.status(404).json({ error: 'File not found' });
+  res.json(await queueConvert(source, { format: b.format, bitrate: b.bitrate, deleteSource: !!b.deleteSource && !!b.name, cover: b.cover !== false }));
+}));
+
+// Raw upload: POST /admin/inbox/upload?name=video.mp4 with the file as the body.
+admin.post('/inbox/upload', h(async (req, res) => {
+  const name = String(req.query.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Missing file name' });
+  const max = Number(getConfig().maxUploadMB || 4096) * 1024 * 1024;
+  if (Number(req.headers['content-length']) > max) return res.status(413).json({ error: 'File is too large' });
+  res.json({ name: await saveUpload(name, req, max) });
+}));
+
+admin.post('/inbox/import', h(async (req, res) => {
+  assertFileChangesAllowed();
+  const b = req.body || {};
+  const names = Array.isArray(b.names) ? b.names.map(String).slice(0, 2000) : [];
+  if (!names.length) return res.status(400).json({ error: 'No files selected' });
+  let dest;
+  if (b.dir) dest = { dir: String(b.dir) };
+  else {
+    const template = String(b.template || TEMPLATES.album.template);
+    const problem = validateTemplate(template);
+    if (problem) return res.status(400).json({ error: problem });
+    dest = { template, root: b.root ? String(b.root) : null };
+  }
+  const result = await importToLibrary(names, dest);
+  const plId = idParam(b.playlistId);
+  if (plId && result.imported.length && q('SELECT 1 FROM playlists WHERE id = ? AND user_id = ?').get(plId, req.user.id)) {
+    addToPlaylist(plId, result.imported.map((i) => i.trackId).filter(Boolean));
+  }
+  res.json(result);
+}));
+
+admin.post('/inbox/jobs/:id/cancel', (req, res) => res.json({ ok: cancelJob(req.params.id) }));
+admin.delete('/inbox/jobs', (_req, res) => { clearFinishedJobs(); res.json({ ok: true }); });
 
 api.use((_req, res) => res.status(404).json({ error: 'Not found' }));

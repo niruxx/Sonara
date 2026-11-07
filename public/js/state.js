@@ -25,6 +25,16 @@ export async function toggleFavorite(track) {
   } catch (err) { toastError(err); }
 }
 
+export async function setRating(track, rating) {
+  try {
+    await api.put(`/ratings/${track.id}`, { rating });
+    track.rating = rating;
+    player.patchTrack(track.id, { rating });
+    bus.emit('rating', track.id, rating);
+    toast(rating ? `Rated ${'★'.repeat(rating)}` : 'Rating cleared', { type: 'success', ms: 1400 });
+  } catch (err) { toastError(err); }
+}
+
 export async function createPlaylist(trackIds = []) {
   const v = await formDialog({
     title: 'New playlist',
