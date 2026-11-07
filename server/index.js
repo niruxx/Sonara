@@ -12,6 +12,7 @@ import { requestMetrics, health, metricsText } from './metrics.js';
 import { setupJukebox } from './jukebox.js';
 import { setupDlna } from './dlna.js';
 import { scheduleBackups } from './backup.js';
+import { schedulePodcastRefresh } from './podcasts.js';
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const config = getConfig();
@@ -72,6 +73,7 @@ const server = app.listen(config.port, config.host, () => {
   scheduleScans();
   watchLibrary();
   scheduleBackups();
+  schedulePodcastRefresh();
   setupJukebox().catch((err) => log.warn('[jukebox]', err.message));
   setupDlna();
 });

@@ -49,7 +49,7 @@ async function openDocPip() {
     if (!t) return;
     $('.mini-art').innerHTML = String(art(t.cover, t.album, 'disc', 600));
     $('.mini-title').textContent = t.title;
-    $('.mini-artist').textContent = `${t.artist} · ${t.album}`;
+    $('.mini-artist').textContent = [...new Set([t.artist, t.album].filter(Boolean))].join(' · ');
     for (const v of ['--c1', '--c2', '--c3']) d.documentElement.style.setProperty(v, root.style.getPropertyValue(v));
   };
   const drawState = (p) => { $('[data-toggle]').innerHTML = ic(p ? 'pause' : 'play'); d.body.classList.toggle('playing', p); };

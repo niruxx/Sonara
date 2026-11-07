@@ -6,6 +6,7 @@ import { state } from '../state.js';
 import { navigate } from '../router.js';
 import { organizeDialog } from '../fileops.js';
 import { albumCard, artistCard, genreTile, trackList, emptyState, skeletonGrid } from '../components.js';
+import { t, locale } from '../i18n.js';
 
 /** Calls load() whenever the sentinel scrolls into view; stops when load returns false. */
 export function infinite(sentinel, load) {
@@ -21,40 +22,40 @@ export function infinite(sentinel, load) {
   return () => io.disconnect();
 }
 
-const noLibrary = () => emptyState('library', 'Your library is empty',
-  state.user?.isAdmin ? 'Add a music folder in Settings and Sonara will scan it for you.' : 'Ask an admin to add a music folder.',
-  state.user?.isAdmin ? html`<a class="btn primary" href="/settings">${ic('folderPlus')} Add music folder</a>` : '');
+const noLibrary = () => emptyState('library', t('Your library is empty'),
+  state.user?.isAdmin ? t('Add a music folder in Settings and Sonara will scan it for you.') : t('Ask an admin to add a music folder.'),
+  state.user?.isAdmin ? html`<a class="btn primary" href="/settings">${ic('folderPlus')} ${t('Add music folder')}</a>` : '');
 
 // ───────── Home ─────────
 
 export async function homeView() {
   const v = el(html`<div><h1 class="page-title"><span class="greeting">${greeting()}</span>${state.user ? `, ${state.user.username}` : ''}</h1>
-    <p class="page-sub">Here's what's spinning in your library.</p><div class="home-body">${skeletonGrid(6)}</div></div>`);
+    <p class="page-sub">${t("Here's what's spinning in your library.")}</p><div class="home-body">${skeletonGrid(6)}</div></div>`);
   const [home, stats] = await Promise.all([api.get('/home'), api.get('/stats')]);
   const body = v.querySelector('.home-body');
   if (!stats.tracks) { body.replaceChildren(el(noLibrary())); return v; }
 
-  const section = (title, href, inner) => html`<section class="section"><div class="section-head"><h2>${title}</h2>${href ? html`<a href="${href}">Show all</a>` : ''}</div>${inner}</section>`;
+  const section = (title, href, inner) => html`<section class="section"><div class="section-head"><h2>${t(title)}</h2>${href ? html`<a href="${href}">${t('Show all')}</a>` : ''}</div>${inner}</section>`;
   body.innerHTML = String(html`
     <div class="actions">
-      <button class="btn primary" data-shuffle-all>${ic('shuffle')} Shuffle library</button>
+      <button class="btn primary" data-shuffle-all>${ic('shuffle')} ${t('Shuffle library')}</button>
       <span class="muted">${plural(stats.tracks, 'song')} · ${plural(stats.albums, 'album')} · ${plural(stats.artists, 'artist')}</span>
     </div>
     ${home.continueListening?.length ? section('Continue listening', null, html`<div class="carousel">${home.continueListening.map((a, i) => html`
       <a class="card" href="/album/${a.id}" style="--i:${i}">
         <div class="card-art">${art(a.cover, a.name)}
-          <button class="card-play" data-resume="${a.id}" data-at="${a.resumeIndex}" aria-label="Resume ${a.name}">${ic('play')}</button>
+          <button class="card-play" data-resume="${a.id}" data-at="${a.resumeIndex}" aria-label="${t('Resume {title}', { title: a.name })}">${ic('play')}</button>
           <div class="card-progress"><i style="width:${Math.round(a.progress * 100)}%"></i></div></div>
         <div class="card-title" title="${a.name}">${a.name}</div>
-        <div class="card-sub">Song ${a.resumeIndex + 1} of ${a.trackCount} · ${a.artist}</div>
+        <div class="card-sub">${t('Song {n} of {total}', { n: a.resumeIndex + 1, total: a.trackCount })} · ${a.artist}</div>
       </a>`)}</div>`) : ''}
     ${home.recentlyPlayed.length ? section('Jump back in', null, html`<div class="recent-list"></div>`) : ''}
-    ${home.onThisDay?.length ? section(`On this day`, null, html`<p class="muted section-note">What you were listening to on ${new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })} in years past.</p><div class="otd-list"></div>`) : ''}
+    ${home.onThisDay?.length ? section(`On this day`, null, html`<p class="muted section-note">${t('What you were listening to on {date} in years past.', { date: new Date().toLocaleDateString(locale(), { month: 'long', day: 'numeric' }) })}</p><div class="otd-list"></div>`) : ''}
     ${home.recentAlbums?.length ? section('Recently played albums', '/albums?sort=lastPlayed', html`<div class="carousel">${home.recentAlbums.map(albumCard)}</div>`) : ''}
     ${section('Recently added', '/albums?sort=recent', html`<div class="carousel">${home.recentlyAdded.map(albumCard)}</div>`)}
     ${home.topArtists.length ? section('Your top artists', '/artists', html`<div class="carousel">${home.topArtists.map((a, i) => artistCard({ ...a, albumCount: null }, i))}</div>`) : ''}
     ${home.mostPlayed.length ? section('On repeat', null, html`<div class="most-list"></div>`) : ''}
-    ${home.rediscover?.length ? section('Rediscover', null, html`<p class="muted section-note">Songs you loved but haven't played in a while.</p><div class="rediscover-list"></div>`) : ''}
+    ${home.rediscover?.length ? section('Rediscover', null, html`<p class="muted section-note">${t("Songs you loved but haven't played in a while.")}</p><div class="rediscover-list"></div>`) : ''}
     ${section('Discover', '/albums?sort=random', html`<div class="carousel">${home.discover.map(albumCard)}</div>`)}
   `);
   if (home.recentlyPlayed.length) body.querySelector('.recent-list').replaceWith(trackList(home.recentlyPlayed.slice(0, 6), { head: false }).el);
@@ -113,10 +114,10 @@ export async function albumsView({ query }) {
   const present = new Set((facets?.types || []).map((t) => t.type));
   const types = ALBUM_TYPES.filter(([k]) => !k || present.has(k));
   const v = el(html`<div>
-    <h1 class="page-title">Albums</h1>
-    <div class="toolbar"><div class="chips">${ALBUM_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="${withQuery('/albums', query, { sort: k })}">${l}</a>`)}</div></div>
+    <h1 class="page-title">${t('Albums')}</h1>
+    <div class="toolbar"><div class="chips">${ALBUM_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="${withQuery('/albums', query, { sort: k })}">${t(l)}</a>`)}</div></div>
     <div class="toolbar">
-      ${types.length > 2 ? html`<div class="chips">${types.map(([k, l]) => html`<a class="chip ${k === type ? 'active' : ''}" href="${withQuery('/albums', query, { type: k })}">${l}</a>`)}</div>` : ''}
+      ${types.length > 2 ? html`<div class="chips">${types.map(([k, l]) => html`<a class="chip ${k === type ? 'active' : ''}" href="${withQuery('/albums', query, { type: k })}">${t(l)}</a>`)}</div>` : ''}
       ${yearInputs(query, facets?.years)}
     </div>
     <div class="grid"></div><div class="sentinel"></div><div class="loader"><div class="logo-mark"><span></span><span></span><span></span><span></span><span></span></div></div>
@@ -144,7 +145,7 @@ export async function albumsView({ query }) {
 // ───────── Artists ─────────
 
 export async function artistsView() {
-  const v = el(html`<div><h1 class="page-title">Artists</h1><p class="page-sub artists-sub"></p>
+  const v = el(html`<div><h1 class="page-title">${t('Artists')}</h1><p class="page-sub artists-sub"></p>
     <div class="grid"></div><div class="sentinel"></div></div>`);
   const grid = v.querySelector('.grid');
   let offset = 0;
@@ -174,7 +175,7 @@ export async function songsView({ query }) {
   const [stats, count, genres] = await Promise.all([api.get('/stats'), api.get('/tracks/count', filters), api.get('/genres').catch(() => [])]);
   const minRating = Number(query.get('minRating') || 0);
   const v = el(html`<div>
-    <h1 class="page-title">Songs</h1>
+    <h1 class="page-title">${t('Songs')}</h1>
     <p class="page-sub">${plural(count.n, 'song')}${count.n !== stats.tracks ? ` of ${stats.tracks.toLocaleString()}` : ''}</p>
     <div class="actions">
       <button class="play-fab" data-play>${ic('play')}</button>
@@ -221,7 +222,7 @@ export async function songsView({ query }) {
 
 export async function genresView() {
   const genres = await api.get('/genres');
-  return el(html`<div><h1 class="page-title">Genres</h1><p class="page-sub">${plural(genres.length, 'genre')}</p>
+  return el(html`<div><h1 class="page-title">${t('Genres')}</h1><p class="page-sub">${plural(genres.length, 'genre')}</p>
     ${genres.length ? html`<div class="grid">${genres.map(genreTile)}</div>`
       : emptyState('tag', 'No genres yet', 'Genres come from your files’ tags. Tag your music and rescan to see them here.')}
   </div>`);
@@ -229,7 +230,7 @@ export async function genresView() {
 
 export async function genreView({ params }) {
   const albums = await api.get('/albums', { genre: params.name, sort: 'artist', limit: 500 });
-  const v = el(html`<div><div class="eyebrow" style="margin-top:12px">Genre</div><h1 class="page-title">${params.name}</h1>
+  const v = el(html`<div><div class="eyebrow" style="margin-top:12px">${t('Genre')}</div><h1 class="page-title">${params.name}</h1>
     <p class="page-sub">${plural(albums.length, 'album')}</p>
     <div class="actions">
       <button class="play-fab" data-play aria-label="Play">${ic('play')}</button>

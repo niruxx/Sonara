@@ -71,6 +71,11 @@ export function attachLyrics(np) {
   async function load(refresh = false) {
     const t = player.current;
     if (!open || !t) return;
+    if (typeof t.id !== 'number') {
+      current = { trackId: t.id };
+      pane.innerHTML = String(html`<div class="lyr-empty">${ic(t.live ? 'radio' : 'podcast')}<p>${t.live ? 'Lyrics aren’t available for radio' : 'Lyrics aren’t available for podcasts'}</p></div>`);
+      return;
+    }
     if (!refresh && current?.trackId === t.id) return;
     current = { trackId: t.id };
     render(null);

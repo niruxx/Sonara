@@ -24,6 +24,11 @@ import { connect, startConnect, moveTo, controlDevice, playHere, castSupported, 
 import { copyText } from './components.js';
 import { registerServiceWorker } from './offline.js';
 import { toggleMiniPlayer, miniSupported } from './mini.js';
+import { podcastsView, podcastView, episodeMenu } from './views/podcasts.js';
+import { radioView, stationMenu } from './views/radio.js';
+import { isLibrary, isEpisode, isStation, subtitle, sourceLabel } from './media.js';
+import { t, loadLocale } from './i18n.js';
+import { announce } from './a11y.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const rootEl = document.getElementById('root');
@@ -46,6 +51,9 @@ route('/stats', statsView);
 route('/smart/:id', smartPlaylistView);
 route('/server', serverView);
 route('/party/:id', partyView);
+route('/podcasts', podcastsView);
+route('/podcast/:id', podcastView);
+route('/radio', radioView);
 
 const NAV = [
   ['/', 'home', 'Home'],
@@ -54,11 +62,14 @@ const NAV = [
   ['/artists', 'mic', 'Artists'],
   ['/songs', 'music', 'Songs'],
   ['/genres', 'tag', 'Genres'],
+  ['/podcasts', 'podcast', 'Podcasts'],
+  ['/radio', 'radio', 'Radio'],
 ];
 
 // ───────────────────────── Boot ─────────────────────────
 
 async function boot() {
+  await loadLocale();
   applyPrefs();
   registerServiceWorker();
   setUnauthorizedHandler(() => location.replace('/'));
@@ -66,7 +77,7 @@ async function boot() {
   try {
     status = await api.get('/auth/status');
   } catch {
-    rootEl.replaceChildren(el(emptyState('alert', "Can't reach the Sonara server", 'Check that the service is running, then refresh.')));
+    rootEl.replaceChildren(el(emptyState('alert', t("Can't reach the Sonara server"), t('Check that the service is running, then refresh.'))));
     return;
   }
   state.sharing = status.sharing;
@@ -108,122 +119,127 @@ const logo = html`<div class="logo-mark"><span></span><span></span><span></span>
 function shell() {
   const u = state.user;
   return html`<div class="shell">
-    <aside class="sidebar">
-      <a class="brand" href="/">${logo}<span class="brand-name">Sonara</span></a>
-      <nav class="nav">${NAV.map(([href, i, label]) => html`<a class="nav-item" href="${href}" data-nav="${href}">${ic(i)}<span>${label}</span></a>`)}</nav>
-      <div class="nav-title"><span>Your music</span>
-        <button class="icon-btn sm" data-new-pl aria-label="New playlist" title="New playlist">${ic('plus')}</button></div>
-      <nav class="nav">
-        <a class="nav-item" href="/favorites" data-nav="/favorites">${ic('heart')}<span>Favorites</span></a>
-        <a class="nav-item" href="/playlists" data-nav="/playlists">${ic('listMusic')}<span>Playlists</span></a>
-        <a class="nav-item" href="/stats" data-nav="/stats">${ic('chart')}<span>Your stats</span></a>
-        ${u.isAdmin ? html`<a class="nav-item" href="/inbox" data-nav="/inbox">${ic('download')}<span>Inbox</span></a>
-          <a class="nav-item" href="/server" data-nav="/server">${ic('activity')}<span>Server</span></a>` : ''}
+    <a class="skip-link" href="#main" data-skip>${t('Skip to content')}</a>
+    <aside class="sidebar" aria-label="${t('Sidebar')}">
+      <a class="brand" href="/" aria-label="${t('Sonara home')}">${logo}<span class="brand-name">Sonara</span></a>
+      <nav class="nav" aria-label="${t('Browse')}">${NAV.map(([href, i, label]) => html`<a class="nav-item" href="${href}" data-nav="${href}">${ic(i)}<span>${t(label)}</span></a>`)}</nav>
+      <div class="nav-title"><span>${t('Your music')}</span>
+        <button class="icon-btn sm" data-new-pl aria-label="${t('New playlist')}" title="${t('New playlist')}">${ic('plus')}</button></div>
+      <nav class="nav" aria-label="${t('Your music')}">
+        <a class="nav-item" href="/favorites" data-nav="/favorites">${ic('heart')}<span>${t('Favorites')}</span></a>
+        <a class="nav-item" href="/playlists" data-nav="/playlists">${ic('listMusic')}<span>${t('Playlists')}</span></a>
+        <a class="nav-item" href="/stats" data-nav="/stats">${ic('chart')}<span>${t('Your stats')}</span></a>
+        ${u.isAdmin ? html`<a class="nav-item" href="/inbox" data-nav="/inbox">${ic('download')}<span>${t('Inbox')}</span></a>
+          <a class="nav-item" href="/server" data-nav="/server">${ic('activity')}<span>${t('Server')}</span></a>` : ''}
       </nav>
-      <div class="nav-pl"></div>
+      <nav class="nav-pl" aria-label="${t('Playlists')}"></nav>
       <div class="user-chip">
-        <a href="/settings" class="avatar" title="Settings">${u.username[0]}</a>
-        <a href="/settings" class="uc-text" style="flex:1;min-width:0"><div class="uc-name">${u.username}</div><div class="uc-role">${u.isAdmin ? 'Admin' : 'Listener'}</div></a>
-        <a href="/settings" class="icon-btn sm uc-text" aria-label="Settings" title="Settings" data-nav="/settings">${ic('settings')}</a>
-        <button class="icon-btn sm uc-text" data-logout aria-label="Sign out" title="Sign out">${ic('logout')}</button>
+        <a href="/settings" class="avatar" title="${t('Settings')}" aria-hidden="true" tabindex="-1">${u.username[0]}</a>
+        <a href="/settings" class="uc-text" style="flex:1;min-width:0"><div class="uc-name">${u.username}</div><div class="uc-role">${u.isAdmin ? t('Admin') : t('Listener')}</div></a>
+        <a href="/settings" class="icon-btn sm uc-text" aria-label="${t('Settings')}" title="${t('Settings')}" data-nav="/settings">${ic('settings')}</a>
+        <button class="icon-btn sm uc-text" data-logout aria-label="${t('Sign out')}" title="${t('Sign out')}">${ic('logout')}</button>
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main" id="main" tabindex="-1">
       <div class="topbar">
-        <button class="icon-btn" data-back aria-label="Back">${ic('chevronLeft')}</button>
-        <button class="icon-btn" data-fwd aria-label="Forward">${ic('chevronRight')}</button>
-        <label class="search">
-          <input type="search" placeholder="Search songs, albums, artists" aria-label="Search" spellcheck="false">
-          ${ic('search')}<kbd>/</kbd>
+        <button class="icon-btn" data-back aria-label="${t('Back')}">${ic('chevronLeft')}</button>
+        <button class="icon-btn" data-fwd aria-label="${t('Forward')}">${ic('chevronRight')}</button>
+        <label class="search" role="search">
+          <input type="search" placeholder="${t('Search songs, albums, artists')}" aria-label="${t('Search')}" spellcheck="false">
+          ${ic('search')}<kbd aria-hidden="true">/</kbd>
         </label>
         <div class="spacer"></div>
       </div>
       <div class="view-host"></div>
     </main>
 
-    <footer class="playerbar">
-      <div class="pb-remote" hidden>${ic('cast')}<span data-remote-label></span><button class="btn sm ghost" data-play-here>Play here</button><button class="icon-btn sm" data-leave-remote aria-label="Stop controlling" title="Stop controlling">${ic('x')}</button></div>
-      <div class="pb-party" hidden>${ic('party')}<span data-party-label></span><button class="btn sm ghost" data-party-copy>Copy link</button><button class="btn sm ghost" data-party-leave>Leave</button></div>
+    <footer class="playerbar" aria-label="${t('Player')}">
+      <div class="pb-remote" hidden>${ic('cast')}<span data-remote-label></span><button class="btn sm ghost" data-play-here>${t('Play here')}</button><button class="icon-btn sm" data-leave-remote aria-label="${t('Stop controlling')}" title="${t('Stop controlling')}">${ic('x')}</button></div>
+      <div class="pb-party" hidden>${ic('party')}<span data-party-label></span><button class="btn sm ghost" data-party-copy>${t('Copy link')}</button><button class="btn sm ghost" data-party-leave>${t('Leave')}</button></div>
       <div class="pb-track">
-        <div class="pb-cover" data-open-np title="Now playing">${art(null, '')}<div class="expand">${ic('maximize')}</div></div>
-        <div class="pb-meta"><div class="pb-title">Nothing playing</div><div class="pb-artist">Pick something you love</div></div>
-        <button class="icon-btn sm heart hide-sm" data-pb-fav aria-label="Favorite">${ic('heart')}</button>
+        <button class="pb-cover" data-open-np title="${t('Now playing')}" aria-label="${t('Open Now Playing')}">${art(null, '')}<div class="expand">${ic('maximize')}</div></button>
+        <div class="pb-meta"><div class="pb-title">${t('Nothing playing')}</div><div class="pb-artist">${t('Pick something you love')}</div></div>
+        <button class="icon-btn sm heart hide-sm" data-pb-fav aria-label="${t('Favorite')}" aria-pressed="false">${ic('heart')}</button>
       </div>
       <div class="pb-center">
         <div class="pb-controls">
-          <button class="icon-btn sm" data-shuffle aria-label="Shuffle" title="Shuffle (S)">${ic('shuffle')}</button>
-          <button class="icon-btn" data-prev aria-label="Previous" title="Previous">${ic('prev')}</button>
-          <button class="pb-play" data-toggle aria-label="Play">${ic('play')}</button>
-          <button class="icon-btn" data-next aria-label="Next" title="Next">${ic('next')}</button>
-          <button class="icon-btn sm" data-repeat aria-label="Repeat" title="Repeat (R)">${ic('repeat')}</button>
+          <button class="icon-btn sm" data-shuffle aria-label="${t('Shuffle')}" aria-pressed="false" title="${t('Shuffle')} (S)">${ic('shuffle')}</button>
+          <button class="icon-btn sm" data-skip-back aria-label="${t('Back 15 seconds')}" title="${t('Back 15 seconds')}" hidden>${ic('skipBack')}</button>
+          <button class="icon-btn" data-prev aria-label="${t('Previous')}" title="${t('Previous')}">${ic('prev')}</button>
+          <button class="pb-play" data-toggle aria-label="${t('Play')}">${ic('play')}</button>
+          <button class="icon-btn" data-next aria-label="${t('Next')}" title="${t('Next')}">${ic('next')}</button>
+          <button class="icon-btn sm" data-skip-fwd aria-label="${t('Forward 30 seconds')}" title="${t('Forward 30 seconds')}" hidden>${ic('skipFwd')}</button>
+          <button class="icon-btn sm" data-repeat aria-label="${t('Repeat: off')}" title="${t('Repeat')} (R)">${ic('repeat')}</button>
         </div>
         <div class="pb-progress">
-          <span class="time" data-cur>0:00</span>
-          <input class="range" type="range" min="0" max="1000" value="0" step="1" data-seek aria-label="Seek">
-          <span class="time" data-dur>0:00</span>
+          <span class="time" data-cur aria-hidden="true">0:00</span>
+          <input class="range" type="range" min="0" max="1000" value="0" step="1" data-seek aria-label="${t('Seek')}">
+          <span class="time" data-dur aria-hidden="true">0:00</span>
         </div>
       </div>
       <div class="pb-right">
-        <button class="icon-btn sm hide-sm" data-open-np aria-label="Now playing" title="Now playing (F)">${ic('maximize')}</button>
-        ${miniSupported() ? html`<button class="icon-btn sm hide-sm" data-mini aria-label="Mini player" title="Mini player (P)">${ic('pip')}</button>` : ''}
-        <button class="icon-btn sm hide-sm pb-extra" data-speed aria-label="Playback speed" title="Playback speed"><span class="pill-label">1×</span></button>
-        <button class="icon-btn sm hide-sm" data-eq aria-label="Equalizer" title="Equalizer (E)">${ic('sliders')}</button>
-        <button class="icon-btn sm hide-sm" data-sleep aria-label="Sleep timer" title="Sleep timer">${ic('moon')}</button>
-        <button class="icon-btn sm" data-devices aria-label="Devices" title="Play on another device">${ic('cast')}</button>
-        <button class="icon-btn sm" data-queue aria-label="Queue" title="Queue (Q)">${ic('queue')}</button>
+        <button class="icon-btn sm hide-sm" data-open-np aria-label="${t('Now playing')}" title="${t('Now playing')} (F)">${ic('maximize')}</button>
+        ${miniSupported() ? html`<button class="icon-btn sm hide-sm" data-mini aria-label="${t('Mini player')}" title="${t('Mini player')} (P)">${ic('pip')}</button>` : ''}
+        <button class="icon-btn sm hide-sm pb-extra" data-speed aria-label="${t('Playback speed')}" title="${t('Playback speed')}"><span class="pill-label">1×</span></button>
+        <button class="icon-btn sm hide-sm" data-eq aria-label="${t('Equalizer')}" title="${t('Equalizer')} (E)">${ic('sliders')}</button>
+        <button class="icon-btn sm hide-sm" data-sleep aria-label="${t('Sleep timer')}" title="${t('Sleep timer')}">${ic('moon')}</button>
+        <button class="icon-btn sm" data-devices aria-label="${t('Devices')}" title="${t('Play on another device')}">${ic('cast')}</button>
+        <button class="icon-btn sm" data-queue aria-label="${t('Queue')}" aria-expanded="false" title="${t('Queue')} (Q)">${ic('queue')}</button>
         <div class="volume">
-          <button class="icon-btn sm" data-mute aria-label="Mute">${ic('volume')}</button>
-          <input class="range" type="range" min="0" max="100" step="1" data-vol aria-label="Volume">
+          <button class="icon-btn sm" data-mute aria-label="${t('Mute')}" aria-pressed="false">${ic('volume')}</button>
+          <input class="range" type="range" min="0" max="100" step="1" data-vol aria-label="${t('Volume')}">
         </div>
       </div>
     </footer>
 
-    <nav class="mobile-nav">
-      <a href="/" data-nav="/">${ic('home')}Home</a>
-      <a href="/search" data-nav="/search">${ic('search')}Search</a>
-      <a href="/albums" data-nav="/albums">${ic('disc')}Albums</a>
-      <a href="/playlists" data-nav="/playlists">${ic('listMusic')}Playlists</a>
-      <a href="/settings" data-nav="/settings">${ic('settings')}Settings</a>
+    <nav class="mobile-nav" aria-label="${t('Browse')}">
+      <a href="/" data-nav="/">${ic('home')}${t('Home')}</a>
+      <a href="/search" data-nav="/search">${ic('search')}${t('Search')}</a>
+      <a href="/albums" data-nav="/albums">${ic('disc')}${t('Albums')}</a>
+      <a href="/podcasts" data-nav="/podcasts">${ic('podcast')}${t('Podcasts')}</a>
+      <a href="/settings" data-nav="/settings">${ic('settings')}${t('Settings')}</a>
     </nav>
   </div>`;
 }
 
-const queueDrawer = () => html`<aside class="drawer" aria-label="Queue">
-  <div class="drawer-head"><h3>Queue</h3><div class="row-gap">
-    <span class="radio-chip" hidden>${ic('waves')}<span data-radio-label></span><button class="icon-btn sm" data-stop-radio aria-label="Stop radio" title="Stop radio">${ic('x')}</button></span>
-    <button class="btn sm ghost" data-clear-q>Clear</button>
-    <button class="icon-btn sm" data-close-q aria-label="Close">${ic('x')}</button></div></div>
+const queueDrawer = () => html`<aside class="drawer" aria-label="${t('Queue')}" id="queue-drawer">
+  <div class="drawer-head"><h2 class="h3">${t('Queue')}</h2><div class="row-gap">
+    <span class="radio-chip" hidden>${ic('waves')}<span data-radio-label></span><button class="icon-btn sm" data-stop-radio aria-label="${t('Stop radio')}" title="${t('Stop radio')}">${ic('x')}</button></span>
+    <button class="btn sm ghost" data-clear-q>${t('Clear')}</button>
+    <button class="icon-btn sm" data-close-q aria-label="${t('Close queue')}">${ic('x')}</button></div></div>
   <div class="drawer-body"></div></aside>`;
 
-const nowPlaying = () => html`<section class="np paused" aria-label="Now playing">
+const nowPlaying = () => html`<section class="np paused" role="dialog" aria-modal="true" aria-label="${t('Now playing')}">
   <div class="np-bg"></div>
-  <canvas class="np-canvas"></canvas>
+  <canvas class="np-canvas" aria-hidden="true"></canvas>
   <div class="np-top">
-    <button class="icon-btn" data-close-np aria-label="Close">${ic('chevronDown')}</button>
-    <div class="label">Playing from your library<b data-np-album></b></div>
+    <button class="icon-btn" data-close-np aria-label="${t('Close Now Playing')}">${ic('chevronDown')}</button>
+    <div class="label"><span data-np-source>${t('Playing from your library')}</span><b data-np-album></b></div>
     <div class="row-gap">
-      <button class="icon-btn" data-np-lyrics aria-label="Lyrics" title="Lyrics (L)">${ic('mic')}</button>
-      <button class="icon-btn" data-np-more aria-label="More">${ic('more')}</button>
+      <button class="icon-btn" data-np-lyrics aria-label="${t('Lyrics')}" title="${t('Lyrics')} (L)">${ic('mic')}</button>
+      <button class="icon-btn" data-np-more aria-label="${t('More options')}">${ic('more')}</button>
     </div>
   </div>
   <div class="np-stage"><div class="np-art">${art(null, '')}</div><div class="np-lyrics" aria-live="off"></div></div>
   <div class="np-bottom">
     <div class="np-info">
       <div class="t"><div class="np-title">—</div><div class="np-artist"></div></div>
-      <button class="icon-btn lg heart" data-np-fav aria-label="Favorite">${ic('heart')}</button>
+      <button class="icon-btn lg heart" data-np-fav aria-label="${t('Favorite')}" aria-pressed="false">${ic('heart')}</button>
     </div>
     <div class="np-progress">
       <span class="time" data-cur>0:00</span>
-      <input class="range" type="range" min="0" max="1000" value="0" data-seek aria-label="Seek">
+      <input class="range" type="range" min="0" max="1000" value="0" data-seek aria-label="${t('Seek')}">
       <span class="time" data-dur>0:00</span>
     </div>
     <div class="np-controls">
-      <button class="icon-btn" data-shuffle aria-label="Shuffle">${ic('shuffle')}</button>
-      <button class="icon-btn lg" data-prev aria-label="Previous">${ic('prev')}</button>
-      <button class="pb-play" data-toggle aria-label="Play">${ic('play')}</button>
-      <button class="icon-btn lg" data-next aria-label="Next">${ic('next')}</button>
-      <button class="icon-btn" data-repeat aria-label="Repeat">${ic('repeat')}</button>
+      <button class="icon-btn" data-shuffle aria-label="${t('Shuffle')}" aria-pressed="false">${ic('shuffle')}</button>
+      <button class="icon-btn" data-skip-back aria-label="${t('Back 15 seconds')}" hidden>${ic('skipBack')}</button>
+      <button class="icon-btn lg" data-prev aria-label="${t('Previous')}">${ic('prev')}</button>
+      <button class="pb-play" data-toggle aria-label="${t('Play')}">${ic('play')}</button>
+      <button class="icon-btn lg" data-next aria-label="${t('Next')}">${ic('next')}</button>
+      <button class="icon-btn" data-skip-fwd aria-label="${t('Forward 30 seconds')}" hidden>${ic('skipFwd')}</button>
+      <button class="icon-btn" data-repeat aria-label="${t('Repeat: off')}">${ic('repeat')}</button>
     </div>
     <div class="np-tech"></div>
   </div>
@@ -242,7 +258,9 @@ async function render(url, { scroll = 0 } = {}) {
   clearPagePalette();
   document.querySelectorAll('[data-nav]').forEach((a) => {
     const n = a.dataset.nav;
-    a.classList.toggle('active', n === '/' ? url.pathname === '/' : url.pathname.startsWith(n) || (n === '/albums' && url.pathname.startsWith('/album/')) || (n === '/artists' && url.pathname.startsWith('/artist/')) || (n === '/playlists' && url.pathname.startsWith('/playlist/')));
+    const on = n === '/' ? url.pathname === '/' : url.pathname.startsWith(n) || (n === '/albums' && url.pathname.startsWith('/album/')) || (n === '/artists' && url.pathname.startsWith('/artist/')) || (n === '/playlists' && url.pathname.startsWith('/playlist/')) || (n === '/podcasts' && url.pathname.startsWith('/podcast/'));
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   document.querySelectorAll('.nav-pl .nav-item').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === url.pathname));
   const searchEl = $('.search input');
@@ -259,8 +277,8 @@ async function render(url, { scroll = 0 } = {}) {
     [view] = await Promise.all([m.view({ params: m.params, query: url.searchParams }), old && url.pathname !== '/search' ? wait(150) : null]);
   } catch (err) {
     view = el(html`<div>${err.status === 404
-      ? emptyState('alert', 'Nothing here', "This page doesn't exist — maybe the music moved?", html`<a class="btn primary" href="/">Go home</a>`)
-      : emptyState('alert', 'Something went wrong', err.message)}</div>`);
+      ? emptyState('alert', t('Nothing here'), t("This page doesn't exist — maybe the music moved?"), html`<a class="btn primary" href="/">${t('Go home')}</a>`)
+      : emptyState('alert', t('Something went wrong'), err.message)}</div>`);
   }
   if (seq !== renderSeq) { view._destroy?.(); return; }
   currentView?._destroy?.();
@@ -269,11 +287,21 @@ async function render(url, { scroll = 0 } = {}) {
   host.replaceChildren(view);
   main.scrollTop = scroll;
   settlePalette();
+  // Screen readers: say which page opened, and start reading from its heading
+  // (but leave focus alone while someone is typing a search).
+  if (firstRender) { firstRender = false; return; }
+  const heading = view.querySelector('h1');
+  if (url.pathname !== '/search' && document.activeElement !== $('.search input')) {
+    if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); } else main.focus({ preventScroll: true });
+  }
+  announce(heading?.textContent.trim() || t('Page loaded'));
 }
+let firstRender = true;
 
 // ───────────────────────── Sidebar ─────────────────────────
 
 function bindSidebar() {
+  $('[data-skip]').addEventListener('click', (e) => { e.preventDefault(); const h = $('.view-host h1') || $('.main'); h.tabIndex = -1; h.focus(); });
   const box = $('.nav-pl');
   const draw = (pls) => {
     box.innerHTML = String(html`${state.smartPlaylists.map((p) => html`<a class="nav-item" href="/smart/${p.id}">
@@ -314,6 +342,8 @@ function bindTransport(scope) {
   scope.querySelector('[data-next]').addEventListener('click', () => player.next());
   scope.querySelector('[data-shuffle]').addEventListener('click', () => player.toggleShuffle());
   scope.querySelector('[data-repeat]').addEventListener('click', () => player.cycleRepeat());
+  scope.querySelector('[data-skip-back]')?.addEventListener('click', () => player.seek(player.time - 15));
+  scope.querySelector('[data-skip-fwd]')?.addEventListener('click', () => player.seek(player.time + 30));
 
   const seek = scope.querySelector('[data-seek]');
   const cur = scope.querySelector('[data-cur]');
@@ -329,22 +359,33 @@ function bindTransport(scope) {
     player.seek((seek.value / seek.max) * player.duration);
     dragging = false;
   });
-  player.on('time', (t, d) => {
+  player.on('time', (now, d) => {
     if (dragging) return;
-    setRange(seek, t, d);
-    cur.textContent = fmtTime(t);
-    dur.textContent = fmtTime(d);
+    const live = !!player.current?.live;
+    setRange(seek, live ? 0 : now, live ? 0 : d);
+    cur.textContent = fmtTime(now);
+    dur.textContent = live ? t('LIVE') : fmtTime(d);
+    seek.setAttribute('aria-valuetext', live ? t('Live stream, {time} listened', { time: fmtTime(now) }) : t('{time} of {total}', { time: fmtTime(now), total: fmtTime(d) }));
+  });
+  player.on('track', (tr) => {
+    const ep = isEpisode(tr);
+    scope.querySelectorAll('[data-skip-back], [data-skip-fwd]').forEach((b) => { b.hidden = !ep; });
+    scope.classList.toggle('live', !!tr?.live);
+    seek.disabled = !!tr?.live;
   });
   player.on('state', (playing) => {
     const b = scope.querySelector('[data-toggle]');
     b.innerHTML = ic(playing ? 'pause' : 'play');
-    b.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    b.setAttribute('aria-label', playing ? t('Pause') : t('Play'));
   });
   player.on('mode', () => {
-    scope.querySelector('[data-shuffle]').classList.toggle('on', player.shuffle);
+    const sh = scope.querySelector('[data-shuffle]');
+    sh.classList.toggle('on', player.shuffle);
+    sh.setAttribute('aria-pressed', String(player.shuffle));
     const r = scope.querySelector('[data-repeat]');
     r.classList.toggle('on', player.repeat !== 'off');
     r.innerHTML = ic(player.repeat === 'one' ? 'repeatOne' : 'repeat');
+    r.setAttribute('aria-label', t({ off: 'Repeat: off', all: 'Repeat: all', one: 'Repeat: this song' }[player.repeat]));
   });
 }
 
@@ -357,7 +398,9 @@ function bindPlayerBar() {
   const drawVol = () => {
     const v = player.muted ? 0 : player.volume;
     setRange(vol, v, 1);
+    vol.setAttribute('aria-valuetext', `${Math.round(v * 100)}%`);
     mute.innerHTML = ic(v === 0 ? 'mute' : v < 0.5 ? 'volumeLow' : 'volume');
+    mute.setAttribute('aria-pressed', String(!!player.muted));
   };
   vol.addEventListener('input', () => player.setVolume(vol.value / 100));
   mute.addEventListener('click', () => player.toggleMute());
@@ -371,7 +414,7 @@ function bindPlayerBar() {
 
   $('[data-pb-fav]', bar).addEventListener('click', () => player.current && toggleFavorite(player.current));
   bar.querySelectorAll('[data-open-np]').forEach((b) => b.addEventListener('click', () => player.current && toggleNowPlaying(true)));
-  $('[data-queue]', bar).addEventListener('click', () => toggleQueue());
+  $('[data-queue]', bar).addEventListener('click', () => toggleQueue(undefined, { focus: true }));
   $('[data-mini]', bar)?.addEventListener('click', () => toggleMiniPlayer().catch((err) => toast(err.message, { type: 'error' })));
 
   // Playback speed
@@ -383,9 +426,9 @@ function bindPlayerBar() {
   drawRate(player.rate);
   player.on('rate', drawRate);
   speed.addEventListener('click', () => openMenu(speed, [
-    { head: 'Playback speed' },
+    { head: t('Playback speed') },
     ...[0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map((r) => ({
-      icon: r === player.rate ? 'check' : null, label: r === 1 ? 'Normal' : `${r}×`, action: () => player.setRate(r),
+      icon: r === player.rate ? 'check' : null, label: r === 1 ? t('Normal') : `${r}×`, action: () => player.setRate(r),
     })),
   ]));
 
@@ -402,9 +445,9 @@ function bindPlayerBar() {
     clearInterval(sleepTick);
     sleep.classList.toggle('on', !!s);
     const label = () => {
-      if (!player.sleep) return 'Sleep timer';
-      if (player.sleep.endOfTrack) return 'Sleep timer: stops after this song';
-      return `Sleep timer: ${Math.max(1, Math.ceil((player.sleep.at - Date.now()) / 60000))} min left`;
+      if (!player.sleep) return t('Sleep timer');
+      if (player.sleep.endOfTrack) return t('Sleep timer: stops after this song');
+      return t('Sleep timer: {n} min left', { n: Math.max(1, Math.ceil((player.sleep.at - Date.now()) / 60000)) });
     };
     sleep.title = label();
     if (s?.at) sleepTick = setInterval(() => { sleep.title = label(); }, 15000);
@@ -412,24 +455,44 @@ function bindPlayerBar() {
   player.on('sleep', drawSleep);
   sleep.addEventListener('click', () => openMenu(sleep, [
     { head: sleep.title },
-    ...[5, 15, 30, 45, 60, 90].map((m) => ({ icon: 'clock', label: `${m} minutes`, action: () => { player.setSleep(m); toast(`Sleep timer set for ${m} minutes`); } })),
-    { icon: 'music', label: 'End of this song', action: () => { player.setSleep('track'); toast('Playback will stop after this song'); } },
-    ...(player.sleep ? ['sep', { icon: 'x', label: 'Turn off timer', action: () => { player.setSleep(null); toast('Sleep timer off'); } }] : []),
+    ...[5, 15, 30, 45, 60, 90].map((m) => ({ icon: 'clock', label: t('{n} minutes', { n: m }), action: () => { player.setSleep(m); toast(t('Sleep timer set for {n} minutes', { n: m })); } })),
+    { icon: 'music', label: t('End of this song'), action: () => { player.setSleep('track'); toast(t('Playback will stop after this song')); } },
+    ...(player.sleep ? ['sep', { icon: 'x', label: t('Turn off timer'), action: () => { player.setSleep(null); toast(t('Sleep timer off')); } }] : []),
   ]));
 
-  player.on('track', (t) => {
-    if (!t) return;
+  let lastAnnounced = null;
+  player.on('track', (tr) => {
+    if (!tr) return;
     const meta = $('.pb-meta', bar);
-    meta.innerHTML = String(html`<div class="pb-title swap" title="${t.title}">${t.title}</div>
-      <div class="pb-artist swap">${artistLinks(t)} · <a href="/album/${t.albumId}">${t.album}</a></div>`);
-    $('.pb-cover', bar).innerHTML = String(html`${art(t.cover, t.album, 'disc', 120)}<div class="expand">${ic('maximize')}</div>`);
-    $('.pb-cover', bar).firstElementChild.classList.add('swap');
+    const same = meta.dataset.id === String(tr.id);
+    meta.dataset.id = tr.id;
+    meta.innerHTML = String(html`<div class="pb-title ${same ? '' : 'swap'}" title="${tr.title}">${tr.title}</div>
+      <div class="pb-artist ${same ? '' : 'swap'}">${subtitle(tr)}</div>`);
+    if (!same) {
+      $('.pb-cover', bar).innerHTML = String(html`${art(tr.cover, tr.album, isEpisode(tr) ? 'podcast' : isStation(tr) ? 'radio' : 'disc', 120)}<div class="expand">${ic('maximize')}</div>`);
+      $('.pb-cover', bar).firstElementChild.classList.add('swap');
+    }
     const fav = $('[data-pb-fav]', bar);
-    fav.dataset.fav = t.id;
-    fav.classList.toggle('on', !!t.favorite);
-    fav.innerHTML = ic(t.favorite ? 'heartFill' : 'heart');
-    setPlayingCover(t.cover);
+    fav.hidden = !isLibrary(tr);
+    fav.dataset.fav = tr.id;
+    fav.classList.toggle('on', !!tr.favorite);
+    fav.setAttribute('aria-pressed', String(!!tr.favorite));
+    fav.innerHTML = ic(tr.favorite ? 'heartFill' : 'heart');
+    setPlayingCover(tr.cover);
+    // Tell screen readers what started (once per song, and for radio when the song on air changes).
+    const key = `${tr.id}|${tr.artist}`;
+    if (key !== lastAnnounced && player.playing) announce(t('Now playing: {title} by {artist}', { title: tr.title, artist: tr.artist }));
+    lastAnnounced = key;
   });
+  player.on('state', (playing) => {
+    const tr = player.current;
+    if (playing && tr && lastAnnounced !== `${tr.id}|${tr.artist}`) {
+      lastAnnounced = `${tr.id}|${tr.artist}`;
+      announce(t('Now playing: {title} by {artist}', { title: tr.title, artist: tr.artist }));
+    }
+  });
+  // The speed button means nothing for live radio.
+  player.on('track', (tr) => { speed.disabled = !!tr?.live; });
 }
 
 // ───────────────────────── Devices (Connect, casting, parties) ─────────────────────────
@@ -526,29 +589,35 @@ function bindDevices() {
 // ───────────────────────── Queue drawer ─────────────────────────
 
 const queueOpen = () => $('.drawer').classList.contains('open');
-function toggleQueue(force) {
+function toggleQueue(force, { focus = false } = {}) {
   const d = $('.drawer');
-  const open = force ?? !d.classList.contains('open');
+  const was = d.classList.contains('open');
+  const open = force ?? !was;
   d.classList.toggle('open', open);
-  $('[data-queue]').classList.toggle('on', open);
+  d.inert = !open;
+  const btn = $('[data-queue]');
+  btn.classList.toggle('on', open);
+  btn.setAttribute('aria-expanded', String(open));
   if (open) drawQueue();
+  if (focus && open && !was) requestAnimationFrame(() => $('[data-close-q]', d).focus());
+  if (!open && was && d.contains(document.activeElement)) btn.focus();
 }
 
 function drawQueue() {
   const body = $('.drawer-body');
   const cur = player.current;
-  if (!cur) { body.innerHTML = String(emptyState('queue', 'Queue is empty', 'Play an album or a song and it shows up here.')); return; }
+  if (!cur) { body.innerHTML = String(emptyState('queue', t('Queue is empty'), t('Play an album or a song and it shows up here.'))); return; }
   const up = player.upNext.slice(0, 300);
-  const item = (t, i, isCur) => html`<div class="q-item ${isCur ? 'current' : ''}" data-q="${i}" style="--i:${isCur ? 0 : i - player.index}" ${isCur ? '' : 'draggable="true"'}>
-    <div class="tl-cover">${art(t.cover, t.album, 'disc', 80)}</div>
-    <div class="tl-text"><div class="tl-title">${t.title}</div><div class="tl-sub">${t.artist}</div></div>
-    ${isCur ? html`<span class="eq"><i></i><i></i><i></i><i></i></span>` : html`<button class="icon-btn sm" data-q-rm="${i}" aria-label="Remove">${ic('x')}</button>`}
+  const item = (tr, i, isCur) => html`<div class="q-item ${isCur ? 'current' : ''}" data-q="${i}" role="listitem" style="--i:${isCur ? 0 : i - player.index}" ${isCur ? 'aria-current="true"' : html`draggable="true" tabindex="0" aria-label="${t('Play {title} by {artist}', { title: tr.title, artist: tr.artist })}"`}>
+    <div class="tl-cover">${art(tr.cover, tr.album, isEpisode(tr) ? 'podcast' : isStation(tr) ? 'radio' : 'disc', 80)}</div>
+    <div class="tl-text"><div class="tl-title">${tr.title}</div><div class="tl-sub">${tr.artist}</div></div>
+    ${isCur ? html`<span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>` : html`<button class="icon-btn sm" data-q-rm="${i}" aria-label="${t('Remove {title} from the queue', { title: tr.title })}">${ic('x')}</button>`}
   </div>`;
   body.innerHTML = String(html`
-    <div class="q-label">Now playing</div>${item(cur, player.index, true)}
-    <div class="q-label">Up next${player.shuffle ? ' · shuffled' : ''}</div>
-    <div class="q-up">${up.length ? up.map((t, k) => item(t, player.index + 1 + k, false)) : html`<p class="muted" style="padding:0 12px">Nothing queued. ${player.repeat === 'all' ? 'The queue will repeat.' : ''}</p>`}</div>
-    ${player.upNext.length > up.length ? html`<p class="muted" style="padding:8px 12px">…and ${player.upNext.length - up.length} more</p>` : ''}`);
+    <h3 class="q-label">${t('Now playing')}</h3><div role="list">${item(cur, player.index, true)}</div>
+    <h3 class="q-label">${t('Up next')}${player.shuffle ? ` · ${t('shuffled')}` : ''}</h3>
+    <div class="q-up" role="list">${up.length ? up.map((tr, k) => item(tr, player.index + 1 + k, false)) : html`<p class="muted" style="padding:0 12px">${t('Nothing queued.')} ${player.repeat === 'all' ? t('The queue will repeat.') : ''}</p>`}</div>
+    ${player.upNext.length > up.length ? html`<p class="muted" style="padding:8px 12px">${t('…and {n} more', { n: player.upNext.length - up.length })}</p>` : ''}`);
 }
 
 function bindQueue() {
@@ -558,9 +627,9 @@ function bindQueue() {
   const chip = $('.radio-chip', d);
   player.on('radio', (r) => {
     chip.hidden = !r;
-    if (r) $('[data-radio-label]', chip).textContent = `${r.label} radio`;
+    if (r) $('[data-radio-label]', chip).textContent = t('{name} radio', { name: r.label });
   });
-  $('[data-stop-radio]', d).addEventListener('click', () => { player.stopRadio(); toast('Radio stopped: the queue won’t refill any more'); });
+  $('[data-stop-radio]', d).addEventListener('click', () => { player.stopRadio(); toast(t('Radio stopped: the queue won’t refill any more')); });
   const body = $('.drawer-body', d);
   body.addEventListener('click', (e) => {
     const rm = e.target.closest('[data-q-rm]');
@@ -568,11 +637,23 @@ function bindQueue() {
     const it = e.target.closest('[data-q]');
     if (it && !it.classList.contains('current')) player.jump(Number(it.dataset.q));
   });
+  body.addEventListener('keydown', (e) => {
+    const it = e.target.closest('[data-q]');
+    if (!it || e.target !== it) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); player.jump(Number(it.dataset.q)); }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      const next = it.nextElementSibling || it.previousElementSibling;
+      player.removeAt(Number(it.dataset.q));
+      requestAnimationFrame(() => (body.querySelector(`[data-q="${next?.dataset.q}"]`) || $('[data-close-q]', d)).focus());
+    }
+  });
   body.addEventListener('contextmenu', (e) => {
     const it = e.target.closest('[data-q]');
     if (!it) return;
     e.preventDefault();
-    trackMenu(e, player.queue[Number(it.dataset.q)]);
+    const tr = player.queue[Number(it.dataset.q)];
+    if (isLibrary(tr)) trackMenu(e, tr);
   });
   dragSort(body, '.q-up .q-item', (from, to) => player.move(player.index + 1 + from, player.index + 1 + to));
   player.on('queue', () => queueOpen() && drawQueue());
@@ -580,11 +661,23 @@ function bindQueue() {
 
 // ───────────────────────── Now playing ─────────────────────────
 
+let npReturnFocus = null;
 function toggleNowPlaying(force) {
   const np = $('.np');
-  const open = force ?? !np.classList.contains('open');
+  const was = np.classList.contains('open');
+  const open = force ?? !was;
   np.classList.toggle('open', open);
+  np.inert = !open;
+  // While it covers the page, keep keyboard and screen-reader focus inside it.
+  $('.shell').inert = open;
   if (open) toggleQueue(false);
+  if (open && !was) {
+    npReturnFocus = document.activeElement;
+    requestAnimationFrame(() => $('[data-close-np]', np).focus());
+  } else if (!open && was) {
+    (npReturnFocus?.isConnected && npReturnFocus !== document.body ? npReturnFocus : $('.playerbar [data-toggle]'))?.focus?.();
+    npReturnFocus = null;
+  }
 }
 
 function bindNowPlaying() {
@@ -592,24 +685,49 @@ function bindNowPlaying() {
   bindTransport(np);
   $('[data-close-np]', np).addEventListener('click', () => toggleNowPlaying(false));
   $('[data-np-fav]', np).addEventListener('click', () => player.current && toggleFavorite(player.current));
-  $('[data-np-more]', np).addEventListener('click', (e) => player.current && trackMenu(e.currentTarget, player.current));
+  np.inert = true;
+  $('[data-np-more]', np).addEventListener('click', (e) => {
+    const tr = player.current;
+    if (!tr) return;
+    if (isLibrary(tr)) return trackMenu(e.currentTarget, tr);
+    if (isEpisode(tr)) {
+      return openMenu(e.currentTarget, [
+        { icon: 'podcast', label: t('Go to podcast'), action: () => { toggleNowPlaying(false); navigate(`/podcast/${tr.podcastId}`); } },
+        { icon: 'checkCircle', label: t('Mark as played'), action: () => { player.markPlayed(); player.next(); } },
+      ]);
+    }
+    openMenu(e.currentTarget, [
+      { icon: 'radio', label: t('Go to Radio'), action: () => { toggleNowPlaying(false); navigate('/radio'); } },
+      ...(tr.homepage ? [{ icon: 'globe', label: t('Open website'), action: () => window.open(tr.homepage, '_blank', 'noopener') }] : []),
+    ]);
+  });
   np.addEventListener('click', (e) => { if (e.target.closest('a[href]')) toggleNowPlaying(false); });
 
-  player.on('track', (t) => {
-    if (!t) return;
-    $('.np-bg', np).style.backgroundImage = t.cover ? `url("/api/cover/${t.cover}")` : '';
-    const a = $('.np-art', np);
-    a.innerHTML = String(art(t.cover, t.album, 'disc', 600));
-    a.classList.remove('swap'); void a.offsetWidth; a.classList.add('swap');
-    $('.np-title', np).textContent = t.title;
-    $('.np-artist', np).innerHTML = String(html`${artistLinks(t)} — <a href="/album/${t.albumId}">${t.album}</a>`);
-    $('[data-np-album]', np).textContent = t.album;
+  let shownId = null;
+  player.on('track', (tr) => {
+    if (!tr) return;
+    const same = shownId === tr.id;
+    shownId = tr.id;
+    if (!same) {
+      $('.np-bg', np).style.backgroundImage = tr.cover ? `url("/api/cover/${tr.cover}")` : '';
+      const a = $('.np-art', np);
+      a.innerHTML = String(art(tr.cover, tr.album, isEpisode(tr) ? 'podcast' : isStation(tr) ? 'radio' : 'disc', 600));
+      a.classList.remove('swap'); void a.offsetWidth; a.classList.add('swap');
+    }
+    $('.np-title', np).textContent = tr.title;
+    $('.np-artist', np).innerHTML = String(subtitle(tr, ' — '));
+    $('[data-np-source]', np).textContent = t({ 'Your library': 'Playing from your library', Podcast: 'Playing a podcast', 'Internet radio': 'Listening to the radio' }[sourceLabel(tr)]);
+    $('[data-np-album]', np).textContent = tr.album;
     const fav = $('[data-np-fav]', np);
-    fav.dataset.fav = t.id;
-    fav.classList.toggle('on', !!t.favorite);
-    fav.innerHTML = ic(t.favorite ? 'heartFill' : 'heart');
-    const tech = [t.codec, t.sampleRate && `${(t.sampleRate / 1000).toFixed(1)} kHz`, t.bitrate && `${Math.round(t.bitrate / 1000)} kbps`].filter(Boolean);
-    $('.np-tech', np).textContent = tech.join(' · ');
+    fav.hidden = !isLibrary(tr);
+    fav.dataset.fav = tr.id;
+    fav.classList.toggle('on', !!tr.favorite);
+    fav.setAttribute('aria-pressed', String(!!tr.favorite));
+    fav.innerHTML = ic(tr.favorite ? 'heartFill' : 'heart');
+    const tech = tr.live ? [t('Live stream')]
+      : isEpisode(tr) ? [tr.publishedAt && new Date(tr.publishedAt).toLocaleDateString(document.documentElement.lang, { dateStyle: 'medium' })]
+        : [tr.codec, tr.sampleRate && `${(tr.sampleRate / 1000).toFixed(1)} kHz`, tr.bitrate && `${Math.round(tr.bitrate / 1000)} kbps`];
+    $('.np-tech', np).textContent = tech.filter(Boolean).join(' · ');
   });
   player.on('state', (playing) => np.classList.toggle('paused', !playing));
 }
@@ -628,6 +746,8 @@ function bindKeys() {
       return;
     }
     if (modalOpen) return;
+    // Space and Enter belong to whatever button, link or list item has focus.
+    if ((k === ' ' || k === 'Enter') && e.target.closest?.('button, a[href], [role=button], [tabindex]:not([tabindex="-1"]), summary')) return;
     const handled = {
       ' ': () => player.toggle(),
       ArrowRight: () => (e.shiftKey ? player.next() : player.seek(player.time + 5)),

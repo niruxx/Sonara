@@ -1,4 +1,5 @@
 import { icon } from './icons.js';
+import { t, plural } from './i18n.js';
 
 // ───────── Safe HTML templating ─────────
 // html`...` escapes every interpolated value unless it is itself html`` or raw().
@@ -46,10 +47,10 @@ export function fmtTime(sec) {
 }
 
 export function fmtLong(sec) {
-  if (!sec) return '0 min';
+  if (!sec) return t('{m} min', { m: 0 });
   const h = Math.floor(sec / 3600);
   const m = Math.round((sec % 3600) / 60);
-  return h ? `${h} hr ${m} min` : `${m} min`;
+  return h ? t('{h} hr {m} min', { h, m }) : t('{m} min', { m });
 }
 
 export function fmtBytes(n) {
@@ -59,11 +60,11 @@ export function fmtBytes(n) {
   return `${n.toFixed(i > 1 ? 1 : 0)} ${u[i]}`;
 }
 
-export const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+export { plural };
 
 export function greeting() {
   const h = new Date().getHours();
-  return h < 5 ? 'Late night vibes' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  return t(h < 5 ? 'Late night vibes' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening');
 }
 
 // ───────── Art ─────────
@@ -85,7 +86,7 @@ export function art(cover, name = '', kind = 'disc', size = 300) {
   if (cover) return html`<img src="${coverUrl(cover)}" alt="" loading="lazy" decoding="async" width="${size}" height="${size}" draggable="false">`;
   const { h1, h2 } = hues(name);
   const letter = kind === 'artist' ? (name.trim()[0] || '?').toUpperCase() : null;
-  return html`<div class="ph" style="--h1:${h1};--h2:${h2}">${letter ? html`<b>${letter}</b>` : ic(kind === 'playlist' ? 'listMusic' : 'disc')}</div>`;
+  return html`<div class="ph" style="--h1:${h1};--h2:${h2}">${letter ? html`<b>${letter}</b>` : ic({ playlist: 'listMusic', podcast: 'podcast', radio: 'radio' }[kind] || 'disc')}</div>`;
 }
 
 // ───────── Colour extraction from album art ─────────

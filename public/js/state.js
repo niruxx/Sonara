@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { Emitter } from './util.js';
 import { player } from './player.js';
 import { toast, toastError, formDialog } from './ui.js';
+import { t } from './i18n.js';
 
 export const bus = new Emitter();
 export const state = { user: null, playlists: [], smartPlaylists: [] };
@@ -21,7 +22,7 @@ export async function toggleFavorite(track) {
     track.favorite = next;
     player.patchTrack(track.id, { favorite: next });
     bus.emit('favorite', track.id, next);
-    if (next) toast('Added to Favorites', { type: 'success', ms: 1600 });
+    if (next) toast(t('Added to Favorites'), { type: 'success', ms: 1600 });
   } catch (err) { toastError(err); }
 }
 
@@ -31,22 +32,22 @@ export async function setRating(track, rating) {
     track.rating = rating;
     player.patchTrack(track.id, { rating });
     bus.emit('rating', track.id, rating);
-    toast(rating ? `Rated ${'★'.repeat(rating)}` : 'Rating cleared', { type: 'success', ms: 1400 });
+    toast(rating ? `${t('Rated')} ${'★'.repeat(rating)}` : t('Rating cleared'), { type: 'success', ms: 1400 });
   } catch (err) { toastError(err); }
 }
 
 export async function createPlaylist(trackIds = []) {
   const v = await formDialog({
-    title: 'New playlist',
-    fields: [{ name: 'name', label: 'Name' }, { name: 'description', label: 'Description (optional)', textarea: true }],
-    confirm: 'Create',
-    validate: (v) => (v.name.trim() ? null : 'Give your playlist a name'),
+    title: t('New playlist'),
+    fields: [{ name: 'name', label: t('Name') }, { name: 'description', label: t('Description (optional)'), textarea: true }],
+    confirm: t('Create'),
+    validate: (v) => (v.name.trim() ? null : t('Give your playlist a name')),
   });
   if (!v) return null;
   try {
     const pl = await api.post('/playlists', { ...v, trackIds });
     await refreshPlaylists();
-    toast(`Created “${pl.name}”`, { type: 'success' });
+    toast(t('Created “{name}”', { name: pl.name }), { type: 'success' });
     return pl;
   } catch (err) { toastError(err); return null; }
 }

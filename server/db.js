@@ -315,6 +315,82 @@ const MIGRATIONS = [
     created_at INTEGER NOT NULL
   );
   `,
+
+  // 7 — podcasts and internet radio.
+  `
+  -- One row per feed, shared by everyone who subscribes to it.
+  CREATE TABLE podcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feed_url TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    author TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    link TEXT,
+    image TEXT,                   -- cached cover (file in data/covers)
+    image_url TEXT,
+    etag TEXT,
+    last_modified TEXT,
+    last_checked INTEGER,
+    last_error TEXT,
+    trusted INTEGER NOT NULL DEFAULT 0,       -- added by an admin: may live on the local network
+    auto_download INTEGER NOT NULL DEFAULT 0, -- keep the newest N episodes downloaded (0 = off)
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE podcast_subscriptions (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    podcast_id INTEGER NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, podcast_id)
+  );
+  CREATE INDEX idx_podcast_subs_podcast ON podcast_subscriptions(podcast_id);
+
+  CREATE TABLE podcast_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    podcast_id INTEGER NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    guid TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    published_at INTEGER,
+    duration REAL,
+    audio_url TEXT NOT NULL,
+    mime TEXT,
+    size INTEGER,
+    season INTEGER,
+    episode INTEGER,
+    file TEXT,                    -- downloaded copy (relative to data/podcasts)
+    file_size INTEGER,
+    UNIQUE (podcast_id, guid)
+  );
+  CREATE INDEX idx_podcast_episodes_date ON podcast_episodes(podcast_id, published_at);
+
+  CREATE TABLE podcast_progress (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    episode_id INTEGER NOT NULL REFERENCES podcast_episodes(id) ON DELETE CASCADE,
+    position REAL NOT NULL DEFAULT 0,
+    played INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, episode_id)
+  );
+
+  -- Internet radio stations, per user.
+  CREATE TABLE radio_stations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    stream_url TEXT NOT NULL,
+    homepage TEXT,
+    image TEXT,
+    tags TEXT NOT NULL DEFAULT '',
+    country TEXT,
+    codec TEXT,
+    bitrate INTEGER,
+    plays INTEGER NOT NULL DEFAULT 0,
+    last_played_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_radio_stations_user ON radio_stations(user_id);
+  `,
 ];
 
 function migrate() {

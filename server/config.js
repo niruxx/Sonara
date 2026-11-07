@@ -15,10 +15,11 @@ export const DATA_DIR = path.resolve(process.env.SONARA_DATA_DIR || path.join(RO
 export const COVERS_DIR = path.join(DATA_DIR, 'covers');
 export const LOGS_DIR = path.join(DATA_DIR, 'logs');
 export const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
+export const PODCASTS_DIR = path.join(DATA_DIR, 'podcasts');
 export const DB_FILE = path.join(DATA_DIR, 'sonara.db');
 export const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
-for (const dir of [DATA_DIR, COVERS_DIR, LOGS_DIR, BACKUPS_DIR]) {
+for (const dir of [DATA_DIR, COVERS_DIR, LOGS_DIR, BACKUPS_DIR, PODCASTS_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -46,6 +47,11 @@ const DEFAULTS = {
   lastfmSecret: '',
   fanartApiKey: '',
   onlineContact: '',        // added to the User-Agent sent to MusicBrainz etc.
+  onlinePodcastDirectory: false, // search podcasts in the Apple Podcasts directory
+  onlineRadioDirectory: false,   // search stations on radio-browser.info
+  // Podcasts
+  podcastRefreshHours: 6,    // how often feeds are checked for new episodes (0 = only by hand)
+  podcastDownloadMB: 1024,   // largest single episode the server will download
   sessionDays: 30,
   // Public URL people use to reach Sonara (e.g. https://music.example.com). Used for share
   // links, single sign-on and casting. '' = work it out from each request.

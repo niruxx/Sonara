@@ -24,8 +24,10 @@ let sendTimer = null;
 
 const trackInfo = (t) => t && {
   id: t.id, title: t.title, artist: t.artist, album: t.album, albumId: t.albumId, artistId: t.artistId,
-  cover: t.cover, duration: t.duration, artists: t.artists,
+  cover: t.cover, duration: t.duration, artists: t.artists, kind: t.kind, podcastId: t.podcastId, live: t.live,
 };
+const isLib = (t) => !!t && typeof t.id === 'number';
+const LOCAL_ONLY = 'Podcasts and radio play in this browser only. Pause it first, then pick a device.';
 
 // ───────── Reporting our state ─────────
 
@@ -83,7 +85,8 @@ async function onCommand({ cmd, args = {} }) {
     }
     case 'handoff': {
       // Another device asked to take over what we're playing.
-      const ids = player.queue.map((t) => t.id);
+      if (!isLib(player.local.current)) return;
+      const ids = player.queue.filter(isLib).map((t) => t.id);
       if (!ids.length) return;
       await api.post('/connect/command', { target: args.to, cmd: 'playTracks', args: { ids, index: player.index, time: player.time, repeat: player.repeat, from: deviceName() } });
       player.pause();
@@ -110,8 +113,10 @@ export async function moveTo(dev) {
     const wasRemote = player.remote;
     const src = wasRemote ? null : player.local;
     if (src && src.current) {
-      const ids = player.queue.map((t) => t.id);
-      await api.post('/connect/command', { target: dev.id, cmd: 'playTracks', args: { ids, index: player.index, time: player.time, repeat: player.repeat, from: deviceName() } });
+      if (!isLib(src.current)) { toast(LOCAL_ONLY); return; }
+      const lib = player.queue.filter(isLib);
+      const ids = lib.map((t) => t.id);
+      await api.post('/connect/command', { target: dev.id, cmd: 'playTracks', args: { ids, index: Math.max(0, lib.indexOf(src.current)), time: player.time, repeat: player.repeat, from: deviceName() } });
       player.pause();
     }
     controlDevice(dev);
@@ -137,7 +142,7 @@ export async function playHere() {
       const time = s.playing ? s.time + (Date.now() - (r.receivedAt || Date.now())) / 1000 : s.time;
       await r.send('pause').catch(() => {});
       if (r.kind === 'cast') r.stop?.();
-      const [t] = await lookup([s.track.id]);
+      const [t] = isLib(s.track) ? await lookup([s.track.id]) : [];
       if (t) player.playList([t], 0, { time });
     }
   } catch (err) { toastError(err); }
@@ -169,14 +174,15 @@ function loadCast() {
 
 export async function startCast() {
   try {
+    if (player.local.current && !isLib(player.local.current)) { toast(LOCAL_ONLY); return; }
     const ctx = await loadCast();
     await ctx.requestSession();
     const session = ctx.getCurrentSession();
     if (!session) return;
     const rp = new cast.framework.RemotePlayer();
     const rc = new cast.framework.RemotePlayerController(rp);
-    const queue = player.queue.slice();
-    let index = player.index;
+    const queue = player.queue.filter(isLib);
+    let index = Math.max(0, queue.indexOf(player.local.current));
     const startTime = player.time;
     player.pause();
     const target = {
@@ -249,6 +255,10 @@ async function followParty(state) {
   try {
     const expected = state.playing ? state.time + 0.25 : state.time;
     if (!state.track) return;
+    if (!isLib(state.track)) {
+      if (follow.warned !== state.track.id) { follow.warned = state.track.id; toast(`The host is playing ${state.track.live ? 'a radio station' : 'a podcast'}, which can't be shared in a party`); }
+      return;
+    }
     if (player.local.current?.id !== state.track.id) {
       const [t] = await lookup([state.track.id]);
       if (!t) { toast(`“${state.track.title}” isn't in your library`, { type: 'error' }); return; }

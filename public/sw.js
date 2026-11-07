@@ -1,7 +1,7 @@
 // Sonara service worker: the app works offline, and songs saved for offline
 // play from the device. Saved songs live in the "sonara-offline" cache under
 // /offline/track/<id>; everything else is cached as it's used.
-const SHELL = 'sonara-shell-v1';
+const SHELL = 'sonara-shell-v2';
 const API = 'sonara-api-v1';
 const OFFLINE = 'sonara-offline';
 const COVERS = 'sonara-covers-v1';
@@ -69,6 +69,8 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   // Live data, downloads and anything sensitive: always from the network.
+  // (Radio and podcast streams too: a live stream never ends, so it must not be cached.)
+  if (p.startsWith('/api/stations/') || /^\/api\/podcasts\/episodes\/\d+\/stream$/.test(p) || p.startsWith('/api/podcasts/opml')) return;
   if (p.startsWith('/api/connect/') || p.startsWith('/api/download/') || p.startsWith('/api/admin/') || p.startsWith('/api/public/') || p.startsWith('/api/auth/oidc') || p === '/metrics') return;
   if (p.startsWith('/api/')) { e.respondWith(networkFirst(req, API)); return; }
   if (req.mode === 'navigate') {

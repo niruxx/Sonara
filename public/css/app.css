@@ -1065,3 +1065,93 @@ body.mini-open [data-mini] { color: var(--accent); }
 
 /* Offline */
 body.is-offline .topbar::after { content: 'Offline'; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 99px; background: rgba(255,180,70,.18); color: #ffc46b; margin-left: 8px; }
+
+/* ───────── Stage 7: podcasts, radio, accessibility ───────── */
+
+/* Keyboard focus is always visible (mouse clicks don't show it). */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.range:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 99px; }
+.nav-item:focus-visible, .card:focus-visible, .q-item:focus-visible { outline-offset: -2px; }
+.main:focus, .view-host h1:focus { outline: none; }
+.skip-link { position: fixed; left: 12px; top: -60px; z-index: 1000; padding: 10px 16px; border-radius: 10px; background: var(--grad); color: #fff; font-weight: 750; transition: top .2s; }
+.skip-link:focus { top: 12px; }
+[hidden] { display: none !important; }
+
+button.pb-cover { padding: 0; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.drawer-head .h3 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+h3.q-label { margin: 0; }
+.q-item[tabindex] { cursor: pointer; }
+
+/* Live radio: no seeking, a LIVE label instead of a length. */
+.live [data-seek] { opacity: .35; pointer-events: none; }
+.live [data-dur] { font-weight: 800; letter-spacing: .08em; color: #ff6b6b; }
+[data-speed]:disabled { opacity: .35; }
+
+/* Page header with actions on the right */
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.page-head .page-sub { margin-bottom: 18px; }
+.page-head > .row-gap { margin-bottom: 18px; }
+.page-search { flex: none; max-width: 520px; margin: 0 0 14px; }
+.chips.fit, .find-bar .chips { width: fit-content; max-width: 100%; }
+.find-bar { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.find-bar .chips { align-self: flex-start; }
+.find-results:empty { display: none; }
+.find-results { margin: 6px 0 22px; }
+.find-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
+.find-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid var(--border); }
+.find-row .grow { flex: 1; min-width: 0; }
+.find-row .grow b, .find-row .grow .muted { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-row .muted { font-size: 12.5px; }
+.find-art { position: relative; width: 48px; height: 48px; flex: none; border-radius: 8px; overflow: hidden; background: var(--glass); }
+.find-art > * { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.find-art img { z-index: 1; background: #111; }
+.notice { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px; background: rgba(251,191,36,.1); color: #fde68a; font-size: 13.5px; }
+.notice svg { width: 16px; height: 16px; flex: none; }
+.icon-btn.spin svg { animation: spin 1s linear infinite; }
+
+/* Unplayed count on a podcast card */
+.count-badge { position: absolute; top: 8px; right: 8px; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 99px; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; background: var(--grad); box-shadow: 0 4px 14px -4px rgba(0,0,0,.6); }
+
+/* Episodes */
+.podcast-about { color: var(--text-2); max-width: 760px; margin: 0 0 18px; white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.chips + .ep-list { margin-top: 14px; }
+.ep-list { display: flex; flex-direction: column; }
+.ep-row { display: flex; gap: 14px; padding: 16px 12px; border-bottom: 1px solid var(--border); animation: rowIn .4s var(--ease) backwards; animation-delay: calc(var(--i, 0) * 20ms); border-radius: 12px; }
+.ep-row:hover { background: rgba(255,255,255,.025); }
+.ep-row.current { background: color-mix(in oklab, var(--c1) 10%, transparent); }
+.ep-row.played .ep-title, .ep-row.played .ep-desc { color: var(--text-3); }
+.ep-cover { width: 64px; height: 64px; flex: none; border-radius: 10px; overflow: hidden; }
+.ep-cover img, .ep-cover .ph { width: 100%; height: 100%; object-fit: cover; }
+.ep-main { flex: 1; min-width: 0; }
+.ep-meta { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.ep-meta a { color: var(--text-2); }
+.ep-meta a:hover { color: var(--text); text-decoration: underline; }
+.ep-meta .dot, .hero-meta .dot { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--text-3); }
+.ep-title { margin: 4px 0 4px; font-size: 16px; font-weight: 750; letter-spacing: -0.01em; }
+.ep-title .link { font: inherit; color: inherit; text-align: left; padding: 0; background: none; border: 0; cursor: pointer; }
+.ep-title .link:hover { text-decoration: underline; }
+.ep-desc { margin: 0 0 10px; color: var(--text-2); font-size: 13.5px; white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.ep-desc.open { -webkit-line-clamp: unset; display: block; }
+.ep-foot { display: flex; align-items: center; gap: 10px; }
+.ep-foot .spacer { flex: 1; }
+.ep-play svg { width: 14px; height: 14px; }
+.ep-progress { width: 80px; height: 4px; border-radius: 99px; background: var(--glass-3); overflow: hidden; }
+.ep-progress i { display: block; height: 100%; background: var(--grad); }
+.ep-dl { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.ep-dl svg { width: 14px; height: 14px; }
+
+/* Radio stations */
+.card.station { cursor: pointer; }
+.card.station .card-more { position: absolute; top: 16px; right: 16px; opacity: 0; background: rgba(0,0,0,.45); transition: opacity .2s; }
+.card.station:hover .card-more, .card.station .card-more:focus-visible { opacity: 1; }
+.card.on-air { border-color: color-mix(in oklab, var(--c1) 50%, transparent); }
+.card.on-air .card-play { opacity: 1; transform: none; }
+.live-badge { position: absolute; left: 10px; top: 10px; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 850; letter-spacing: .1em; color: #fff; background: #e5484d; box-shadow: 0 0 18px -2px #e5484d; }
+
+@media (hover: none) {
+  .card.station .card-more { opacity: 1; }
+}
+@media (max-width: 640px) {
+  .ep-cover { width: 48px; height: 48px; }
+  .ep-progress { display: none; }
+}

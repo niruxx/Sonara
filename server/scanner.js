@@ -554,7 +554,9 @@ export function watchLibrary() {
   for (const root of getConfig().musicDirs.map((d) => path.resolve(d))) {
     if (!fs.existsSync(root)) continue;
     try {
-      const w = fs.watch(root, { recursive: true, persistent: false }, (_event, filename) => onFsChange(filename));
+      // Watch the canonical path: on Windows, a short 8.3 name (C:\Users\LONGNA~1\...) makes
+      // libuv abort the whole process when the first change comes in.
+      const w = fs.watch(fs.realpathSync.native(root), { recursive: true, persistent: false }, (_event, filename) => onFsChange(filename));
       w.on('error', (err) => log.warn(`[watch] Stopped watching ${root}: ${err.message}`));
       watchers.push(w);
     } catch (err) {

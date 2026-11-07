@@ -8,7 +8,7 @@ import { ROOT, getConfig } from './config.js';
 const pkg = JSON.parse(fs.readFileSync(`${ROOT}/package.json`, 'utf8'));
 // Services like MusicBrainz ask clients to identify themselves. Admins can add
 // a contact (URL or email) with "onlineContact" in data/config.json.
-const userAgent = () => {
+export const userAgent = () => {
   const contact = String(getConfig().onlineContact || '').trim();
   return `Sonara/${pkg.version} ( ${contact || 'self-hosted music server'} )`;
 };

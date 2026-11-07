@@ -5,6 +5,7 @@
 import { api } from './api.js';
 import { Emitter, shuffleArray, prefs, coverUrl } from './util.js';
 import { toast } from './ui.js';
+import { t } from './i18n.js';
 
 const MAX_PERSIST = 2000;
 const PRELOAD_BEFORE_END = 30;   // seconds before the end to start buffering the next track
@@ -13,6 +14,12 @@ const SERVER_SYNC_MS = 15000;    // how often to push the playback position whil
 const SLEEP_FADE = 8;            // seconds of fade-out when the sleep timer fires
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const PROGRESS_MS = 10000;       // how often to save a podcast episode's position while playing
+const ON_AIR_MS = 15000;         // how often to ask what song a radio station is playing
+
+/** Library songs have numeric ids; podcast episodes and radio stations bring their own stream address. */
+const isLib = (t) => !!t && typeof t.id === 'number';
+const srcFor = (t, extra) => (t.src ? t.src : api.streamUrl(t.id, extra));
 
 // ───────── Equalizer ─────────
 export const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
@@ -115,7 +122,7 @@ class Player extends Emitter {
         const t = this.current;
         if (t && this.#announced !== t.id) {
           this.#announced = t.id;
-          api.post(`/tracks/${t.id}/nowplaying`).catch(() => {});
+          if (isLib(t)) api.post(`/tracks/${t.id}/nowplaying`).catch(() => {});
         }
       });
       on('waiting', () => this.emit('state', this.playing, true));
@@ -128,7 +135,7 @@ class Player extends Emitter {
     }
     this.#applyVolume();
     this.#setupMediaSession();
-    addEventListener('pagehide', () => { this.#save(true); this.#syncServer(true); });
+    addEventListener('pagehide', () => { this.#save(true); this.#syncServer(true); if (this.playing) this.#saveProgress({ keepalive: true }); });
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.#syncServer(true); });
   }
 
@@ -232,6 +239,7 @@ class Player extends Emitter {
   playList(tracks, start = 0, { shuffle = false, radio = null, time = 0, autoplay = true } = {}) {
     if (!tracks?.length) return;
     if (this.remote) {
+      if (!tracks.every(isLib)) { toast(t('Podcasts and radio play in this browser only. Pick “This browser” in the devices menu first.')); return; }
       let ids = tracks.map((t) => t.id);
       let index = Math.min(Math.max(0, start), ids.length - 1);
       if (shuffle || this.shuffle) {
@@ -253,7 +261,8 @@ class Player extends Emitter {
       this.queue = [tracks[first], ...shuffleArray(rest)];
       this.index = 0;
     } else {
-      this.queue = tracks;
+      // A copy: queue and original must be separate arrays, or "Play next" / "Add to queue" insert everything twice.
+      this.queue = tracks.slice();
       this.index = Math.min(Math.max(0, start), tracks.length - 1);
     }
     this.emit('mode');
@@ -275,7 +284,7 @@ class Player extends Emitter {
     const oi = this.original.indexOf(this.current);
     this.original.splice(oi + 1, 0, ...tracks);
     this.#queueChanged();
-    toast(tracks.length === 1 ? `“${tracks[0].title}” plays next` : `${tracks.length} songs play next`, { type: 'success' });
+    toast(tracks.length === 1 ? t('“{title}” plays next', { title: tracks[0].title }) : t('{n} items play next', { n: tracks.length }), { type: 'success' });
   }
 
   addToQueue(tracks) {
@@ -285,7 +294,7 @@ class Player extends Emitter {
     this.queue.push(...tracks);
     this.original.push(...tracks);
     this.#queueChanged();
-    toast(tracks.length === 1 ? `Added “${tracks[0].title}” to queue` : `Added ${tracks.length} songs to queue`, { type: 'success' });
+    toast(tracks.length === 1 ? t('Added “{title}” to the queue', { title: tracks[0].title }) : t('Added {n} items to the queue', { n: tracks.length }), { type: 'success' });
   }
 
   jump(i) {
@@ -333,6 +342,8 @@ class Player extends Emitter {
     if (this.remote) return this.#send('play');
     if (!this.current) return;
     this.#ensureAudioGraph();
+    // A paused radio station disconnects; reconnect so playback is live again.
+    if (this.current.live && !this.audio.getAttribute('src')) { this.audio.src = srcFor(this.current); this.audio.playbackRate = 1; }
     try {
       await this.audio.play();
     } catch (err) {
@@ -343,6 +354,8 @@ class Player extends Emitter {
     if (this.remote) return this.#send('pause');
     this.#cancelTransition(true);
     this.audio.pause();
+    this.#saveProgress();
+    if (this.current?.live) { this.audio.removeAttribute('src'); this.audio.load(); }
   }
   toggle() { this.playing ? this.pause() : this.play(); }
 
@@ -366,13 +379,13 @@ class Player extends Emitter {
 
   seek(sec) {
     if (this.remote) return this.#send('seek', { time: Math.max(0, sec) });
-    if (!this.current) return;
+    if (!this.current || this.current.live) return;
     this.#cancelTransition(true);
     const target = Math.max(0, Math.min(sec, this.duration || sec));
     const a = this.audio;
     // A stream that is still being transcoded can't seek yet: reload it once the
     // server has the whole file (wait=1) and jump to the position then.
-    if (!this.#seekable(target) && a.src && this.current) {
+    if (!this.#seekable(target) && a.src && isLib(this.current)) {
       const wasPlaying = this.playing;
       a.src = api.streamUrl(this.current.id, { wait: 1 });
       a.addEventListener('loadedmetadata', () => {
@@ -412,7 +425,7 @@ class Player extends Emitter {
 
   setRate(r) {
     this.rate = clamp(Math.round(r * 100) / 100, 0.25, 4);
-    for (const d of this.decks) d.playbackRate = this.rate;
+    for (const d of this.decks) d.playbackRate = d._track?.live ? 1 : this.rate;
     prefs.set('rate', this.rate);
     this.emit('rate', this.rate);
     this.#save();
@@ -537,7 +550,8 @@ class Player extends Emitter {
     if (this.#transition) return;
     d.pause();
     d._track = n.track;
-    d.src = api.streamUrl(n.track.id);
+    if (n.track.live) return; // radio connects when it starts, not ahead of time
+    d.src = srcFor(n.track);
     d.playbackRate = this.rate;
     d.load();
     this.#preloaded = { track: n.track, deck: d };
@@ -626,7 +640,7 @@ class Player extends Emitter {
       this.#fade = 1;
       this.#applyVolume();
       this.emit('sleep', null);
-      toast('Sleep timer: playback paused');
+      toast(t('Sleep timer: playback paused'));
     };
     requestAnimationFrame(step);
   }
@@ -650,19 +664,71 @@ class Player extends Emitter {
     } else {
       this.other.pause();
       this.other.removeAttribute('src');
-      // Resuming mid-song: ask for the complete file so seeking works on transcoded streams too.
-      this.audio.src = api.streamUrl(t.id, startAt ? { wait: 1 } : {});
+      if (!startAt && t.kind === 'episode' && t.resumeAt) startAt = t.resumeAt;
+      if (t.live) {
+        startAt = 0;
+        // Connect to a station only when it's actually going to play.
+        if (autoplay) this.audio.src = srcFor(t);
+        else { this.audio.removeAttribute('src'); this.audio.load(); }
+      } else {
+        // Resuming mid-song: ask for the complete file so seeking works on transcoded streams too.
+        this.audio.src = srcFor(t, startAt && isLib(t) ? { wait: 1 } : {});
+      }
     }
     this.audio._track = t;
-    this.audio.playbackRate = this.rate;
+    this.audio.playbackRate = t.live ? 1 : this.rate;
     if (startAt) {
       const once = () => { this.audio.currentTime = startAt; };
       this.audio.addEventListener('loadedmetadata', once, { once: true });
     }
     this.#applyVolume();
+    this.#lastProgress = Date.now();
     this.emit('track', t);
     this.#updateMediaSession();
+    this.#watchOnAir();
     if (autoplay) this.play();
+  }
+
+  // ───────── Podcasts & radio ─────────
+
+  #lastProgress = 0;
+  #onAirTimer = null;
+
+  /** Save where we are in a podcast episode (so it resumes there, on any device). */
+  #saveProgress({ played = false, keepalive = false } = {}) {
+    const t = this.current;
+    if (this.remote || t?.kind !== 'episode') return;
+    const position = played ? 0 : this.audio.currentTime;
+    if (!played && position < 5) return;
+    this.#lastProgress = Date.now();
+    t.resumeAt = played ? 0 : position;
+    fetch(`/api/podcasts/episodes/${t.episodeId}/progress`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', keepalive,
+      body: JSON.stringify({ position, played }),
+    }).then(() => this.emit('progress', t.episodeId, position, played)).catch(() => {});
+  }
+
+  /** Mark the current episode as finished. */
+  markPlayed() { this.#saveProgress({ played: true }); }
+
+  /** Radio: show the song that's on air (the server reads it from the stream's metadata). */
+  #watchOnAir() {
+    clearInterval(this.#onAirTimer);
+    const tr = this.current;
+    if (!tr?.live) return;
+    const check = async () => {
+      if (this.current !== tr || this.remote) { clearInterval(this.#onAirTimer); return; }
+      if (!this.playing) return;
+      const r = await api.get(`/stations/${tr.stationId}/now`).catch(() => null);
+      const title = r?.title || t('Live radio');
+      if (this.current === tr && title !== tr.artist) {
+        tr.artist = title;
+        this.emit('track', tr);
+        this.#updateMediaSession();
+      }
+    };
+    setTimeout(check, 4000);
+    this.#onAirTimer = setInterval(check, ON_AIR_MS);
   }
 
   #state() {
@@ -680,6 +746,14 @@ class Player extends Emitter {
     const a = this.audio;
     this.emit('time', a.currentTime, this.duration);
     const d = this.duration;
+    if (!isLib(this.current)) {
+      if (this.current?.kind === 'episode' && Date.now() - this.#lastProgress > PROGRESS_MS) this.#saveProgress();
+      if ('mediaSession' in navigator && d && navigator.mediaSession.setPositionState) {
+        try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(a.currentTime, d), playbackRate: a.playbackRate }); } catch { /* ignore */ }
+      }
+      this.#save();
+      return;
+    }
     if (!this.#scrobbled && d && a.currentTime >= Math.min(30, d / 2)) {
       this.#scrobbled = true;
       api.post(`/tracks/${this.current.id}/play`).catch(() => {});
@@ -698,12 +772,13 @@ class Player extends Emitter {
 
   #onEnded() {
     if (this.remote) return;
+    if (this.current?.kind === 'episode') this.#saveProgress({ played: true });
     if (this.sleep?.endOfTrack) {
       this.sleep = null;
       this.emit('sleep', null);
       this.audio.currentTime = 0;
       this.#state();
-      toast('Sleep timer: stopped after this song');
+      toast(t('Sleep timer: stopped after this song'));
       return;
     }
     if (this.repeat === 'one') { this.seek(0); this.play(); return; }
@@ -714,7 +789,7 @@ class Player extends Emitter {
     if (this.remote) return;
     if (!this.audio.src || !this.current) return;
     this.#errors++;
-    toast(`Couldn't play “${this.current.title}”`, { type: 'error' });
+    toast(this.current.live ? t("Couldn't connect to {name}. The station may be offline.", { name: this.current.title }) : t("Couldn't play “{title}”", { title: this.current.title }), { type: 'error' });
     if (this.#errors < 5 && this.index < this.queue.length - 1) setTimeout(() => this.next(true), 800);
   }
 
@@ -746,7 +821,7 @@ class Player extends Emitter {
     this.#radioBusy = true;
     const radio = this.radio;
     try {
-      const exclude = this.queue.slice(-300).map((t) => t.id).join(',');
+      const exclude = this.queue.slice(-300).filter(isLib).map((t) => t.id).join(',');
       const more = await api.get('/radio', { seed: radio.seed, limit: 25, exclude });
       if (this.radio !== radio || !more.length) return;
       this.queue.push(...more);
@@ -823,8 +898,8 @@ class Player extends Emitter {
       play: () => this.play(), pause: () => this.pause(),
       previoustrack: () => this.prev(), nexttrack: () => this.next(),
       seekto: (d) => this.seek(d.seekTime),
-      seekbackward: (d) => this.seek(this.time - (d.seekOffset || 10)),
-      seekforward: (d) => this.seek(this.time + (d.seekOffset || 10)),
+      seekbackward: (d) => this.seek(this.time - (d.seekOffset || (this.current?.kind === 'episode' ? 15 : 10))),
+      seekforward: (d) => this.seek(this.time + (d.seekOffset || (this.current?.kind === 'episode' ? 30 : 10))),
     };
     for (const [k, fn] of Object.entries(h)) { try { ms.setActionHandler(k, fn); } catch { /* unsupported */ } }
   }
@@ -868,13 +943,19 @@ class Player extends Emitter {
 
   /** Push the playback state to the server (debounced; `now` for page unload). */
   #syncServer(now = false) {
-    if (!this.userId || !this.current) return;
+    // Only library songs follow you to other devices (episodes keep their own position on the server).
+    if (!this.userId || !isLib(this.current)) return;
     clearTimeout(this.#syncTimer);
     const send = () => {
       this.#lastSync = Date.now();
-      const { start, q, original } = this.#window();
+      const w = this.#window();
+      const keep = w.q.map((t, i) => (isLib(t) ? i : -1)).filter((i) => i >= 0);
+      const remap = new Map(keep.map((i, k) => [i, k]));
+      const q = keep.map((i) => w.q[i]);
+      const original = w.original.map((i) => remap.get(i)).filter((i) => i != null);
+      const index = remap.get(this.index - w.start) ?? 0;
       const body = JSON.stringify({
-        queue: q.map((t) => t.id), original, index: this.index - start, time: this.audio.currentTime,
+        queue: q.map((t) => t.id), original, index, time: this.audio.currentTime,
         shuffle: this.shuffle, repeat: this.repeat, volume: this.volume, muted: this.muted, rate: this.rate,
         device: `${deviceId}|${deviceName()}`,
       });

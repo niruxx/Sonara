@@ -6,6 +6,7 @@ import { api } from './api.js';
 import { state, bus, toggleFavorite, setRating, createPlaylist, addToPlaylist } from './state.js';
 import { navigate } from './router.js';
 import { fileMenuItems } from './fileops.js';
+import { t } from './i18n.js';
 
 // ───────── Cards ─────────
 
@@ -91,24 +92,24 @@ const fetchTracks = {
 export async function collectionMenu(at, kind, id, name) {
   let list;
   try { list = await fetchTracks[kind](id); } catch (err) { return toastError(err); }
-  if (!list?.length) return toast('Nothing to play here yet');
+  if (!list?.length) return toast(t('Nothing to play here yet'));
   const { offlineItems } = await import('./offline.js');
   const first = list[0];
   openMenu(at, [
     { head: name },
-    { icon: 'play', label: 'Play', action: () => player.playList(list, 0) },
-    { icon: 'shuffle', label: 'Shuffle', action: () => player.playList(list, 0, { shuffle: true }) },
-    { icon: 'playNext', label: 'Play next', action: () => player.playNext(list) },
-    { icon: 'addQueue', label: 'Add to queue', action: () => player.addToQueue(list) },
+    { icon: 'play', label: t('Play'), action: () => player.playList(list, 0) },
+    { icon: 'shuffle', label: t('Shuffle'), action: () => player.playList(list, 0, { shuffle: true }) },
+    { icon: 'playNext', label: t('Play next'), action: () => player.playNext(list) },
+    { icon: 'addQueue', label: t('Add to queue'), action: () => player.addToQueue(list) },
     'sep',
-    { icon: 'list', label: 'Add to playlist…', action: (e) => playlistPicker(at instanceof Element ? at : e, list) },
-    ...(kind === 'album' ? [{ icon: 'radio', label: 'Start album radio', action: () => player.startRadio(`album:${id}`, name) },
-      { icon: 'mic', label: 'Go to artist', action: () => navigate(`/artist/${first.albumArtistId || first.artistId}`) }] : []),
-    ...(kind === 'artist' ? [{ icon: 'radio', label: 'Start artist radio', action: () => player.startRadio(`artist:${id}`, name) }] : []),
-    { icon: kind === 'artist' ? 'mic' : kind === 'album' ? 'disc' : 'listMusic', label: `Open ${kind === 'smart' ? 'playlist' : kind}`, action: () => navigate(`/${kind}/${encodeURIComponent(id)}`) },
+    { icon: 'list', label: t('Add to playlist…'), action: (e) => playlistPicker(at instanceof Element ? at : e, list) },
+    ...(kind === 'album' ? [{ icon: 'radio', label: t('Start album radio'), action: () => player.startRadio(`album:${id}`, name) },
+      { icon: 'mic', label: t('Go to artist'), action: () => navigate(`/artist/${first.albumArtistId || first.artistId}`) }] : []),
+    ...(kind === 'artist' ? [{ icon: 'radio', label: t('Start artist radio'), action: () => player.startRadio(`artist:${id}`, name) }] : []),
+    { icon: kind === 'artist' ? 'mic' : kind === 'album' ? 'disc' : 'listMusic', label: t({ artist: 'Open artist', album: 'Open album' }[kind] || 'Open playlist'), action: () => navigate(`/${kind}/${encodeURIComponent(id)}`) },
     ...(['album', 'playlist'].includes(kind) && (canShare() || canDownload()) ? ['sep'] : []),
-    ...(['album', 'playlist'].includes(kind) && canShare() ? [{ icon: 'share', label: `Share ${kind}…`, action: () => shareDialog(kind, id, name) }] : []),
-    ...(['album', 'playlist'].includes(kind) && canDownload() ? [{ icon: 'download', label: `Download ${kind}…`, action: () => downloadDialog(kind, id, name) }] : []),
+    ...(['album', 'playlist'].includes(kind) && canShare() ? [{ icon: 'share', label: t(kind === 'album' ? 'Share album…' : 'Share playlist…'), action: () => shareDialog(kind, id, name) }] : []),
+    ...(['album', 'playlist'].includes(kind) && canDownload() ? [{ icon: 'download', label: t(kind === 'album' ? 'Download album…' : 'Download playlist…'), action: () => downloadDialog(kind, id, name) }] : []),
     ...(['album', 'playlist'].includes(kind) ? offlineItems(kind, id, name, list, first.cover) : []),
   ]);
 }
@@ -125,7 +126,7 @@ document.addEventListener('contextmenu', (e) => {
     return;
   }
   // The song playing in the player bar / Now Playing screen.
-  if (e.target.closest('.pb-track, .np-art, .np-info') && player.current && !player.remote) {
+  if (e.target.closest('.pb-track, .np-art, .np-info') && player.current && !player.remote && typeof player.current.id === 'number') {
     if (e.target.closest('a[href]')) return;
     e.preventDefault();
     trackMenu(e, player.current);
@@ -137,22 +138,22 @@ document.addEventListener('contextmenu', (e) => {
 export function trackMenu(at, track, { tracks = [track], extra = [] } = {}) {
   const multi = tracks.length > 1;
   openMenu(at, [
-    { icon: 'play', label: multi ? `Play ${tracks.length} songs` : 'Play', action: () => player.playList(tracks, 0) },
-    { icon: 'playNext', label: 'Play next', action: () => player.playNext(tracks) },
-    { icon: 'addQueue', label: 'Add to queue', action: () => player.addToQueue(tracks) },
-    ...(!multi ? [{ icon: 'radio', label: 'Start song radio', action: () => player.startRadio(`track:${track.id}`, track.title) }] : []),
+    { icon: 'play', label: multi ? plural(tracks.length, 'song').replace(/^/, `${t('Play')} `) : t('Play'), action: () => player.playList(tracks, 0) },
+    { icon: 'playNext', label: t('Play next'), action: () => player.playNext(tracks) },
+    { icon: 'addQueue', label: t('Add to queue'), action: () => player.addToQueue(tracks) },
+    ...(!multi ? [{ icon: 'radio', label: t('Start song radio'), action: () => player.startRadio(`track:${track.id}`, track.title) }] : []),
     'sep',
-    { icon: 'list', label: 'Add to playlist…', action: (e) => playlistPicker(at instanceof Element ? at : e, tracks) },
-    ...(!multi ? [{ icon: track.favorite ? 'heartFill' : 'heart', label: track.favorite ? 'Remove from Favorites' : 'Add to Favorites', action: () => toggleFavorite(track) }] : []),
-    ...(!multi ? [{ icon: track.rating ? 'starFill' : 'star', label: track.rating ? `Rating: ${'★'.repeat(track.rating)}` : 'Rate…', action: (e) => ratingMenu(at instanceof Element ? at : e, track) }] : []),
+    { icon: 'list', label: t('Add to playlist…'), action: (e) => playlistPicker(at instanceof Element ? at : e, tracks) },
+    ...(!multi ? [{ icon: track.favorite ? 'heartFill' : 'heart', label: track.favorite ? t('Remove from Favorites') : t('Add to Favorites'), action: () => toggleFavorite(track) }] : []),
+    ...(!multi ? [{ icon: track.rating ? 'starFill' : 'star', label: track.rating ? `${t('Rating')}: ${'★'.repeat(track.rating)}` : t('Rate…'), action: (e) => ratingMenu(at instanceof Element ? at : e, track) }] : []),
     ...(!multi ? ['sep',
-      { icon: 'disc', label: 'Go to album', action: () => navigate(`/album/${track.albumId}`) },
+      { icon: 'disc', label: t('Go to album'), action: () => navigate(`/album/${track.albumId}`) },
       ...(track.artists?.length > 1
-        ? track.artists.map((a) => ({ icon: 'mic', label: `Go to ${a.name}`, action: () => navigate(`/artist/${a.id}`) }))
-        : [{ icon: 'mic', label: 'Go to artist', action: () => navigate(`/artist/${track.artistId}`) }]),
-      { icon: 'info', label: 'Track details', action: () => trackDetails(track) },
-      ...(canShare() ? [{ icon: 'share', label: 'Share…', action: () => shareDialog('track', track.id, track.title) }] : []),
-      ...(canDownload() ? [{ icon: 'download', label: 'Download…', action: () => downloadDialog('track', track.id, track.title) }] : [])] : []),
+        ? track.artists.map((a) => ({ icon: 'mic', label: t('Go to {name}', { name: a.name }), action: () => navigate(`/artist/${a.id}`) }))
+        : [{ icon: 'mic', label: t('Go to artist'), action: () => navigate(`/artist/${track.artistId}`) }]),
+      { icon: 'info', label: t('Track details'), action: () => trackDetails(track) },
+      ...(canShare() ? [{ icon: 'share', label: t('Share…'), action: () => shareDialog('track', track.id, track.title) }] : []),
+      ...(canDownload() ? [{ icon: 'download', label: t('Download…'), action: () => downloadDialog('track', track.id, track.title) }] : [])] : []),
     ...(fileMenuItems(tracks).length ? ['sep', ...fileMenuItems(tracks)] : []),
     ...(extra.length ? ['sep', ...extra] : []),
   ]);

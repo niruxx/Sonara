@@ -1,14 +1,17 @@
 // UI primitives: toasts, context menus, modals, ripple + tilt effects, drag-sorting.
 import { html, ic, el, esc } from './util.js';
+import { menuKeys, trapFocus } from './a11y.js';
+import { t } from './i18n.js';
 
 // ───────── Toasts ─────────
 
 export function toast(message, { type = 'info', ms = 2600 } = {}) {
-  const t = el(html`<div class="toast ${type}">${ic(type === 'error' ? 'alert' : type === 'success' ? 'check' : 'sparkles')}<span>${message}</span></div>`);
-  document.getElementById('toasts').append(t);
+  const box = el(html`<div class="toast ${type}">${ic(type === 'error' ? 'alert' : type === 'success' ? 'check' : 'sparkles')}<span>${message}</span></div>`);
+  if (type === 'error') box.setAttribute('role', 'alert');
+  document.getElementById('toasts').append(box);
   setTimeout(() => {
-    t.classList.add('out');
-    t.addEventListener('animationend', () => t.remove(), { once: true });
+    box.classList.add('out');
+    box.addEventListener('animationend', () => box.remove(), { once: true });
   }, ms);
 }
 export const toastError = (err) => toast(err?.message || String(err), { type: 'error', ms: 4000 });
@@ -17,11 +20,16 @@ export const toastError = (err) => toast(err?.message || String(err), { type: 'e
 
 let openMenuEl = null;
 let menuAnchor = null;   // { el, dx, dy }: the button a menu hangs from, so it can follow page scrolling
+let menuOpener = null;   // what had focus before the menu opened (focus goes back there)
 export function closeMenu() {
   if (!openMenuEl) return;
   const m = openMenuEl;
+  const hadFocus = m.contains(document.activeElement);
   openMenuEl = null;
   menuAnchor = null;
+  if (menuOpener?.setAttribute) menuOpener.setAttribute('aria-expanded', 'false');
+  if (hadFocus && menuOpener?.isConnected) menuOpener.focus({ preventScroll: true });
+  menuOpener = null;
   m.classList.add('out');
   m.addEventListener('animationend', () => m.remove(), { once: true });
 }
@@ -33,12 +41,13 @@ export function closeMenu() {
 export function openMenu(at, items) {
   closeMenu();
   const m = el(html`<div class="menu" role="menu"></div>`);
+  menuOpener = at instanceof Element ? at : document.activeElement;
   const scroll = items.length > 12 ? el('<div class="menu-scroll"></div>') : m;
   if (scroll !== m) m.append(scroll);
   for (const it of items) {
     if (it === 'sep') { m.append(el('<div class="menu-sep"></div>')); continue; }
-    if (it.head) { m.insertBefore(el(html`<div class="menu-head">${it.head}</div>`), scroll === m ? null : scroll); continue; }
-    const b = el(html`<button class="menu-item ${it.danger ? 'danger' : ''}" role="menuitem">${it.icon ? ic(it.icon) : ''}<span>${it.label}</span></button>`);
+    if (it.head) { m.insertBefore(el(html`<div class="menu-head" role="presentation">${it.head}</div>`), scroll === m ? null : scroll); if (!m.hasAttribute('aria-label')) m.setAttribute('aria-label', String(it.head).replace(/<[^>]+>/g, '')); continue; }
+    const b = el(html`<button class="menu-item ${it.danger ? 'danger' : ''}" role="menuitem" tabindex="-1">${it.icon ? ic(it.icon) : ''}<span>${it.label}</span></button>`);
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!it.keepOpen) closeMenu();
@@ -67,6 +76,10 @@ export function openMenu(at, items) {
     const r = at.getBoundingClientRect();
     menuAnchor = { el: at, dx: Math.max(8, x) - r.left, dy: Math.max(8, y) - r.top };
   }
+  if (menuOpener instanceof Element && menuOpener.matches('button')) menuOpener.setAttribute('aria-expanded', 'true');
+  menuKeys(m);
+  // Tab leaves the menu (and closes it), like a native menu.
+  m.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); closeMenu(); } });
   m.querySelector('.menu-item')?.focus({ preventScroll: true });
   return m;
 }
@@ -95,10 +108,17 @@ export function modal(markup, build) {
   return new Promise((resolve) => {
     const back = el(html`<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">${markup}</div></div>`);
     const box = back.firstElementChild;
+    const opener = document.activeElement;
+    const heading = box.querySelector('h1, h2, h3');
+    if (heading) { heading.id ||= `dlg-${Math.random().toString(36).slice(2, 8)}`; box.setAttribute('aria-labelledby', heading.id); }
+    const untrap = trapFocus(box);
     let done = false;
     const close = (value) => {
       if (done) return;
       done = true;
+      untrap();
+      if (opener?.isConnected && box.contains(document.activeElement)) opener.focus({ preventScroll: true });
+      else if (opener?.isConnected && document.activeElement === document.body) opener.focus({ preventScroll: true });
       removeEventListener('keydown', onKey);
       back.classList.add('out');
       back.addEventListener('animationend', () => back.remove(), { once: true });
@@ -110,32 +130,32 @@ export function modal(markup, build) {
     box.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => close(null)));
     document.getElementById('overlays').append(back);
     build?.(box, close);
-    box.querySelector('input, textarea')?.focus();
+    (box.querySelector('input:not([type=hidden]), textarea, select') || box.querySelector('[data-ok], .btn.primary, button'))?.focus();
   });
 }
 
-export function confirmDialog({ title, message, confirm = 'Confirm', danger = false }) {
+export function confirmDialog({ title, message, confirm = t('Confirm'), danger = false }) {
   return modal(html`
     <h3>${title}</h3><p>${message}</p>
     <div class="modal-actions">
-      <button class="btn ghost" data-close>Cancel</button>
+      <button class="btn ghost" data-close>${t('Cancel')}</button>
       <button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${confirm}</button>
     </div>`, (box, close) => box.querySelector('[data-ok]').addEventListener('click', () => close(true)));
 }
 
 /** fields: [{ name, label, type, value, textarea }] → resolves with { name: value } or null. */
-export function formDialog({ title, message, fields, confirm = 'Save', validate }) {
+export function formDialog({ title, message, fields, confirm = t('Save'), validate }) {
   return modal(html`
     <h3>${title}</h3>${message ? html`<p>${message}</p>` : ''}
-    <form>
+    <form novalidate>
       ${fields.map((f) => html`<div class="field">
         ${f.textarea
-          ? html`<textarea name="${f.name}" placeholder=" ">${f.value || ''}</textarea>`
-          : html`<input name="${f.name}" type="${f.type || 'text'}" value="${f.value || ''}" placeholder=" " autocomplete="off">`}
+          ? html`<textarea name="${f.name}" placeholder=" " aria-label="${f.label}">${f.value || ''}</textarea>`
+          : html`<input name="${f.name}" type="${f.type || 'text'}" value="${f.value || ''}" placeholder=" " autocomplete="off" aria-label="${f.label}">`}
         <label>${f.label}</label></div>`)}
-      <div class="form-error"></div>
+      <div class="form-error" role="alert"></div>
       <div class="modal-actions">
-        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="button" class="btn ghost" data-close>${t('Cancel')}</button>
         <button type="submit" class="btn primary">${confirm}</button>
       </div>
     </form>`, (box, close) => {
@@ -143,7 +163,10 @@ export function formDialog({ title, message, fields, confirm = 'Save', validate 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const values = Object.fromEntries(new FormData(form));
-      const err = validate ? await validate(values) : null;
+      const submit = form.querySelector('[type=submit]');
+      submit.disabled = true;
+      let err;
+      try { err = validate ? await validate(values) : null; } finally { submit.disabled = false; }
       if (err) {
         const fe = form.querySelector('.form-error');
         fe.textContent = '';

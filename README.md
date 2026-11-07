@@ -21,6 +21,9 @@
 - ⌨️ **Keyboard shortcuts**, plus media keys and lock-screen controls (Media Session API).
 - 🔄 **Automatic library scanning.** Folders are watched, so changes show up within seconds, and a scheduled scan catches anything missed. Files that can't be read are listed in Settings.
 - 📱 **Works on phones.** The layout is responsive and the app can be installed as a PWA. Save albums and playlists **for offline** and they play without a connection (needs HTTPS or localhost).
+- 🎙️ **Podcasts.** Follow shows by RSS feed (or search the Apple Podcasts directory), and episodes resume where you stopped, on any device. Skip 15 s back or 30 s ahead, mark episodes played, download them to the server (by hand or automatically), and import or export your subscriptions as OPML.
+- 📻 **Internet radio.** Add Icecast and SHOUTcast streams (or `.pls` / `.m3u` links), or search [radio-browser.info](https://www.radio-browser.info). The song that's on air shows in the player.
+- ♿ **Accessible and translated.** Works with a keyboard and screen readers (skip link, focus handling in menus and dialogs, announced track changes) and follows your system's reduced-motion setting. The interface is available in English, Spanish, French and German.
 - 🪟 **Mini player** in an always-on-top window (press **P**), colour **themes** or your own accent colour, and a **high-contrast** mode. Admins can **change album covers** by uploading, pasting a link, or picking a picture from the album folder.
 
 - 🔁 **Plays anything.** Formats browsers can't handle (ALAC, WMA, APE, WavPack, AIFF, DSD…) and single-file albums with a `.cue` sheet are converted on the fly. Lower the streaming quality to save mobile data, and download songs, albums or playlists as originals or converted.
@@ -145,6 +148,7 @@ This removes the service or Scheduled Task, the firewall rule and `node_modules`
 | `data/covers/` | Cover art cache (rebuilt automatically by a rescan) |
 | `data/logs/sonara.log` | Server log |
 | `data/downloads/` | The Inbox: downloads and conversions waiting to be filed |
+| `data/podcasts/` | Podcast episodes downloaded to the server |
 | `data/transcode-cache/` | Converted audio, reused on later plays (size limit in Settings) |
 | `data/backups/` | Database snapshots taken before each update, from the Server page, on a schedule, or with `npm run backup` |
 | `data/secret.key` | Random key that signs stream links for casting (keep it private) |
@@ -198,6 +202,20 @@ npm run backup     # snapshot the database
 | `F` | Full-screen Now Playing |
 | `Q` | Queue |
 | `/` | Search |
+
+In menus, the arrow keys move between items and `Esc` closes them. In the queue, `Enter` plays the focused song and `Delete` removes it.
+
+## Podcasts and radio
+
+- **Podcasts** are shared between users: two people following the same feed share its episodes and downloads, but each has their own subscriptions and progress. Feeds are checked every 6 hours (`podcastRefreshHours`, 0 = only by hand). Admins can turn on automatic downloads per show; the largest episode the server will download is `podcastDownloadMB` (default 1024).
+- **Radio** stations belong to each user. Sonara relays the stream (so it works over HTTPS and with the equalizer) and reads the station's "now playing" metadata. HLS streams (`.m3u8`) aren't supported yet.
+- **Search** for podcasts (Apple Podcasts directory) and stations (radio-browser.info) is off by default; turn it on in Settings → Online services.
+- **Local addresses:** Sonara only fetches podcast feeds and radio streams on your local network (for example a home Icecast server) when an admin adds them. Other users can only add public addresses.
+- Podcasts and radio play in the browser you start them in; they aren't sent to other devices, Chromecast or listening parties.
+
+## Translations
+
+The interface is translated in `public/js/locales/`. Each file maps the English text to the translation, and anything missing falls back to English. To add a language, copy `es.js`, translate the values, and add it to `LANGUAGES` in `public/js/i18n.js`. Pick the language in Settings → Language (it follows the browser by default).
 
 ## Library tips
 

@@ -38,6 +38,8 @@ import { setupJukebox, jukeboxStatus } from './jukebox.js';
 import { setupDlna, dlnaStatus, discoverRenderers } from './dlna.js';
 import { baseUrl } from './oidc.js';
 import { DATA_DIR } from './config.js';
+import { podcastsApi } from './podcasts.js';
+import { stationsApi } from './stations.js';
 
 export const api = express.Router();
 api.use(express.json({ limit: '1mb' }));
@@ -1191,6 +1193,8 @@ admin.get('/settings', (req, res) => {
     allowFileChanges: !!c.allowFileChanges,
     transcodeCacheMB: c.transcodeCacheMB ?? 2048,
     onlineLyrics: !!c.onlineLyrics, onlineArtistInfo: !!c.onlineArtistInfo, onlineCovers: !!c.onlineCovers,
+    onlinePodcastDirectory: !!c.onlinePodcastDirectory, onlineRadioDirectory: !!c.onlineRadioDirectory,
+    podcastRefreshHours: Number(c.podcastRefreshHours ?? 6), podcastDownloadMB: Number(c.podcastDownloadMB) || 1024,
     lastfmApiKey: c.lastfmApiKey || '', lastfmSecretSet: !!c.lastfmSecret, fanartApiKey: c.fanartApiKey || '', onlineContact: c.onlineContact || '',
     downloadsDir: inboxDir(),
     publicUrl: c.publicUrl || '', sharing: c.sharing !== false, importPlaylists: c.importPlaylists !== false,
@@ -1221,7 +1225,9 @@ admin.put('/settings', (req, res) => {
   if (req.body?.scanOnStartup != null) patch.scanOnStartup = !!req.body.scanOnStartup;
   if (req.body?.watch != null) patch.watch = !!req.body.watch;
   if (req.body?.transcodeCacheMB != null) patch.transcodeCacheMB = int(req.body.transcodeCacheMB, 2048, 0, 1024 * 1024);
-  for (const k of ['onlineLyrics', 'onlineArtistInfo', 'onlineCovers']) if (req.body?.[k] != null) patch[k] = !!req.body[k];
+  for (const k of ['onlineLyrics', 'onlineArtistInfo', 'onlineCovers', 'onlinePodcastDirectory', 'onlineRadioDirectory']) if (req.body?.[k] != null) patch[k] = !!req.body[k];
+  if (req.body?.podcastRefreshHours != null) patch.podcastRefreshHours = int(req.body.podcastRefreshHours, 6, 0, 24 * 7);
+  if (req.body?.podcastDownloadMB != null) patch.podcastDownloadMB = int(req.body.podcastDownloadMB, 1024, 16, 1024 * 64);
   for (const k of ['lastfmApiKey', 'lastfmSecret', 'fanartApiKey', 'onlineContact']) if (req.body?.[k] != null) patch[k] = String(req.body[k]).trim().slice(0, 200);
   if (req.body?.allowFileChanges != null) patch.allowFileChanges = !!req.body.allowFileChanges;
   if (req.body?.downloadsDir != null) {
@@ -1663,5 +1669,8 @@ admin.delete('/transcode', h(async (_req, res) => { await clearCache(); res.json
 
 admin.post('/inbox/jobs/:id/cancel', (req, res) => res.json({ ok: cancelJob(req.params.id) }));
 admin.delete('/inbox/jobs', (_req, res) => { clearFinishedJobs(); res.json({ ok: true }); });
+
+api.use('/podcasts', podcastsApi);
+api.use('/stations', stationsApi);
 
 api.use((_req, res) => res.status(404).json({ error: 'Not found' }));

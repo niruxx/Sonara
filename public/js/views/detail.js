@@ -10,6 +10,7 @@ import { setPalette } from '../theme.js';
 import { collectionFileItems } from '../fileops.js';
 import { smartEditor } from './smart.js';
 import { coverEditor } from '../covers.js';
+import { t } from '../i18n.js';
 import { offlineItems } from '../offline.js';
 
 const dot = html`<span class="dot"></span>`;
@@ -149,7 +150,7 @@ export async function playlistsView() {
   const mine = state.playlists.filter((p) => p.owned !== false);
   const others = state.playlists.filter((p) => p.owned === false);
   const v = el(html`<div>
-    <h1 class="page-title">Playlists</h1><p class="page-sub">${plural(state.playlists.length, 'playlist')}</p>
+    <h1 class="page-title">${t('Playlists')}</h1><p class="page-sub">${plural(state.playlists.length, 'playlist')}</p>
     <div class="actions"><button class="btn primary" data-new>${ic('plus')} New playlist</button>
       <button class="btn" data-new-smart>${ic('sparkles')} New smart playlist</button>
       <button class="btn" data-import>${ic('upload')} Import…</button></div>
@@ -303,7 +304,7 @@ export async function searchView({ query }) {
     return v;
   }
   box.innerHTML = String(html`
-    <h1 class="page-title" style="font-size:30px">Results for “${q}”</h1>
+    <h1 class="page-title" style="font-size:30px">${t('Results for “{q}”', { q })}</h1>
     ${r.tracks.length ? html`<section class="section"><div class="section-head"><h2>Songs</h2></div><div class="tl"></div></section>` : ''}
     ${r.artists.length ? html`<section class="section"><div class="section-head"><h2>Artists</h2></div><div class="carousel">${r.artists.map(artistCard)}</div></section>` : ''}
     ${r.albums.length ? html`<section class="section"><div class="section-head"><h2>Albums</h2></div><div class="carousel">${r.albums.map(albumCard)}</div></section>` : ''}

@@ -142,21 +142,58 @@ What Sonara already ships:
 
 ---
 
-## Stage 7: Beyond music and polish
+## Stage 7: Beyond music and polish ✅
 
-*Goal: round out the experience.*
+*Goal: round out the experience.* **Status: complete, apart from the two deferred items.**
 
 - [x] Equalizer (10-band Web Audio EQ with presets, pre-amp and a live response curve)
-- [ ] Podcasts (RSS subscriptions, download, resume position)
-- [ ] Audiobooks (chapters, per-book resume, speed control)
-- [ ] Internet radio stations
+- [x] **Podcasts**: RSS and Atom subscriptions shared between users, per-user resume position that follows you across devices, 15 s / 30 s skip, played / unplayed, server-side downloads (manual or automatic for the newest N), scheduled feed refresh, OPML import/export, and optional 🔌 Apple Podcasts directory search
+- [x] **Internet radio**: per-user stations (Icecast, SHOUTcast, `.pls`, `.m3u`), relayed through Sonara with the on-air song read from ICY metadata, and optional 🔌 radio-browser.info search
 - [x] Cover art editing (upload, paste a web address, or pick an image from the album's folder; survives rescans)
 - [x] Mini player / picture-in-picture mode (Document Picture-in-Picture, with a video PiP fallback)
 - [x] Customizable themes and accent overrides; high-contrast mode
-- [ ] Accessibility pass (screen readers, focus order, reduced motion)
-- [ ] Internationalization (i18n) with translations
+- [x] **Accessibility pass**: skip link, landmarks and `aria-current`, focus moves to each new page's heading, visible keyboard focus everywhere, arrow-key menus that hand focus back when closed, focus-trapped dialogs, a keyboard-operable queue, track changes announced to screen readers, labelled sliders with spoken values, and the system's reduced-motion setting respected
+- [x] **Internationalization**: translation layer with plural rules and locale-aware dates, a language picker (follows the browser by default), and Spanish, French and German for the main interface (navigation, player, queue, library, podcasts, radio, menus)
+- [ ] Translate the remaining screens (Server, Inbox, file management, most admin settings)
 - [x] Offline playback in the PWA (cache selected albums and playlists)
-- [ ] Desktop wrapper with OS-level media integration (stretch goal)
+- [ ] *Deferred:* Audiobooks (chapters, per-book resume). Playback speed and podcast-style resume cover the basics; dedicated apps such as Audiobookshelf do the rest better
+- [ ] *Deferred:* Desktop wrapper with OS-level media integration (stretch goal)
+
+---
+
+## Stage 8: Ideas for later
+
+*Goal: features that would make Sonara stand out as a music player. Nothing here is built yet; items are grouped, not ordered.*
+
+### Listening
+- [ ] Waveform seek bar (peaks generated once per file 🔌 ffmpeg, cached like covers)
+- [ ] Headphone correction: import AutoEq / parametric EQ profiles per output device
+- [ ] "Night mode" dynamic range compression, plus mono downmix and left/right balance (also an accessibility aid for hearing in one ear)
+- [ ] Loudness analysis for files without ReplayGain tags (EBU R128 via 🔌 ffmpeg), stored in the database instead of the files
+- [ ] Wake-up alarm that fades in a playlist or station
+- [ ] Bookmarks and chapters for long mixes and DJ sets; Podcasting 2.0 chapters and transcripts for podcasts
+
+### Library intelligence
+- [ ] Acoustic fingerprinting (🔌 Chromaprint / AcoustID) to identify untagged files and suggest MusicBrainz tags
+- [ ] BPM and key detection, with filters and smart playlist rules that use them
+- [ ] "Missing albums" and new-release alerts for artists you own, from the MusicBrainz discography
+- [ ] Import listening history from Last.fm, ListenBrainz or a Spotify data export, so stats and "Rediscover" work from day one
+- [ ] Match playlists exported from Spotify / Apple Music (CSV) against the local library
+
+### Discovery
+- [ ] "Sounds like" recommendations from local audio analysis (no online service needed)
+- [ ] Smart shuffle that avoids the same artist back to back and favours songs you rate highly
+- [ ] Mood / activity mixes generated from genres, tempo and listening time of day
+
+### Social and home
+- [ ] Song requests and voting in listening parties
+- [ ] Friend activity: what people on the same server are playing (opt-in)
+- [ ] Multi-room synced playback across speakers (🔌 Snapcast)
+- [ ] Home Assistant / MQTT integration and webhooks (now playing, play/pause, start a playlist)
+
+### Fun
+- [ ] More visualizers, including Milkdrop presets (🔌 butterchurn)
+- [ ] Karaoke mode: synced lyrics full screen with vocals reduced (🔌 stem separation, or a simple centre-channel cut)
 
 ---
 

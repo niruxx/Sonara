@@ -9,6 +9,7 @@ import { preferredCodec } from '../api.js';
 import { eqEditor } from '../eq.js';
 import { organizeDialog } from '../fileops.js';
 import { accountExtras, adminPanels, bindExtras, userAccessDialog, offlinePanel } from './settings-extra.js';
+import { t, LANGUAGES, langPref, setLangPref } from '../i18n.js';
 
 const QUALITIES = [[0, 'Original quality'], [320, '320 kbps'], [256, '256 kbps'], [192, '192 kbps'], [160, '160 kbps'], [128, '128 kbps'], [96, '96 kbps'], [64, '64 kbps']];
 
@@ -23,8 +24,8 @@ export async function settingsView({ query } = {}) {
   ]);
 
   const v = el(html`<div>
-    <h1 class="page-title">Settings</h1>
-    <p class="page-sub">Signed in as <b>${state.user.username}</b>${admin ? ' · Administrator' : ''}</p>
+    <h1 class="page-title">${t('Settings')}</h1>
+    <p class="page-sub">${t('Signed in as')} <b>${state.user.username}</b>${admin ? ` · ${t('Administrator')}` : ''}</p>
     <div class="panels">
       <section class="panel wide" style="--i:0">
         <h3>${ic('waves')} Your library</h3><p>A quick look at what Sonara is keeping track of.</p>
@@ -100,6 +101,13 @@ export async function settingsView({ query } = {}) {
         <label class="check"><input type="checkbox" data-online="onlineArtistInfo" ${settings.onlineArtistInfo ? 'checked' : ''}><span class="sw"></span>Artist bios and photos (MusicBrainz, Wikipedia)</label>
         <label class="check"><input type="checkbox" data-online="onlineCovers" ${settings.onlineCovers ? 'checked' : ''}><span class="sw"></span>Find missing album covers (Cover Art Archive)</label>
         <div class="row-gap" style="margin:6px 0 4px 50px"><button class="btn sm ghost" data-find-covers>${ic('search')} Look for missing covers now</button><span class="muted" data-cover-status></span></div>
+        <label class="check"><input type="checkbox" data-online="onlinePodcastDirectory" ${settings.onlinePodcastDirectory ? 'checked' : ''}><span class="sw"></span>${t('Podcast search (Apple Podcasts directory; your search words are sent)')}</label>
+        <label class="check"><input type="checkbox" data-online="onlineRadioDirectory" ${settings.onlineRadioDirectory ? 'checked' : ''}><span class="sw"></span>${html`${t('Radio station search')} (<a href="https://www.radio-browser.info" target="_blank" rel="noopener">radio-browser.info</a>)`}</label>
+        <div class="row-gap" style="margin-top:12px">
+          <label class="muted" for="pod-refresh">${t('Check podcasts for new episodes every')}</label>
+          <input class="input sm" id="pod-refresh" type="number" min="0" max="168" value="${settings.podcastRefreshHours}" data-pod-refresh style="width:80px">
+          <span class="muted">${t('hours (0 = only by hand)')}</span>
+        </div>
         <div class="org-grid" style="margin-top:16px">
           <label class="muted">Last.fm API key</label>
           <input class="input sm mono" data-key="lastfmApiKey" value="${settings.lastfmApiKey}" placeholder="Needed for Last.fm scrobbling and similar artists" autocomplete="off" spellcheck="false">
@@ -165,12 +173,19 @@ export async function settingsView({ query } = {}) {
       </section>
 
       <section class="panel" style="--i:5">
-        <h3>${ic('palette')} Appearance</h3><p>Make it yours. Stored in this browser.</p>
+        <h3>${ic('languages')} ${t('Language')}</h3><p>${t('Used for menus, buttons and messages. Stored in this browser.')}</p>
+        <select class="input sm" data-lang aria-label="${t('Language')}">
+          <option value="auto" ${langPref() === 'auto' ? 'selected' : ''}>${t('Automatic (browser language)')}</option>
+          ${LANGUAGES.map((l) => html`<option value="${l.code}" lang="${l.code}" ${langPref() === l.code ? 'selected' : ''}>${l.name}</option>`)}
+        </select>
+        <p class="muted" style="font-size:12px;margin-top:10px">${t('Some admin screens are still in English. Translations are welcome: see public/js/locales.')}</p>
+
+        <h3 style="margin-top:26px">${ic('palette')} ${t('Appearance')}</h3><p>${t('Make it yours. Stored in this browser.')}</p>
         <label class="check"><input type="checkbox" data-pref="dynamicColor" ${prefs.get('dynamicColor', true) ? 'checked' : ''}><span class="sw"></span>Colours follow album art</label>
         <label class="check"><input type="checkbox" data-pref="ambient" ${prefs.get('ambient', true) ? 'checked' : ''}><span class="sw"></span>Animated ambient background</label>
         <label class="check"><input type="checkbox" data-pref="visualizer" ${prefs.get('visualizer', true) ? 'checked' : ''}><span class="sw"></span>Audio visualizer &amp; beat-reactive glow</label>
-        <label class="check"><input type="checkbox" data-pref="reduceMotion" ${prefs.get('reduceMotion', false) ? 'checked' : ''}><span class="sw"></span>Reduce motion</label>
-        <label class="check"><input type="checkbox" data-pref="highContrast" ${prefs.get('highContrast', false) ? 'checked' : ''}><span class="sw"></span>High contrast</label>
+        <label class="check"><input type="checkbox" data-pref="reduceMotion" ${prefs.get('reduceMotion', false) ? 'checked' : ''}><span class="sw"></span>${t('Reduce motion')}${matchMedia('(prefers-reduced-motion: reduce)').matches ? html` <span class="muted">${t('(already on: your system asks for less motion)')}</span>` : ''}</label>
+        <label class="check"><input type="checkbox" data-pref="highContrast" ${prefs.get('highContrast', false) ? 'checked' : ''}><span class="sw"></span>${t('High contrast')}</label>
         <label class="muted" style="display:block;margin-top:14px">Colour theme <span style="font-size:12px">(used when colours don't follow the album art)</span></label>
         <div class="theme-swatches">${Object.entries(THEMES).map(([k, t]) => html`<button class="swatch ${!prefs.get('accentCustom', '') && prefs.get('themePreset', 'aurora') === k ? 'on' : ''}" data-theme="${k}" title="${t.name}" aria-label="${t.name}"
           style="background:linear-gradient(135deg, ${t.colors[0]}, ${t.colors[1]} 55%, ${t.colors[2]})"></button>`)}
@@ -203,9 +218,19 @@ export async function settingsView({ query } = {}) {
           <kbd class="k">L</kbd><span>Lyrics</span>
           <kbd class="k">/</kbd><span>Search</span>
         </div>
+        <p class="muted" style="font-size:12px;margin-top:10px">${t('Tab moves between controls, and arrow keys move inside menus. In the queue, Enter plays a song and Delete removes it.')}</p>
       </section>
     </div>
   </div>`);
+
+  // ── Language: re-render everything in the new language.
+  v.querySelector('[data-lang]').addEventListener('change', (e) => {
+    setLangPref(e.target.value);
+    location.reload();
+  });
+  v.querySelector('[data-pod-refresh]')?.addEventListener('change', async (e) => {
+    try { await api.put('/admin/settings', { podcastRefreshHours: Number(e.target.value) }); toast(t('Saved'), { type: 'success', ms: 1200 }); } catch (err) { toastError(err); }
+  });
 
   // ── Appearance
   v.querySelectorAll('[data-pref]').forEach((input) => input.addEventListener('change', () => {
@@ -549,8 +574,12 @@ export function folderPicker(opts = {}) {
   });
 }
 
+const systemReducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+systemReducedMotion.addEventListener?.('change', () => applyPrefs());
+
 export function applyPrefs() {
   document.body.classList.toggle('no-ambient', !prefs.get('ambient', true));
-  document.body.classList.toggle('reduce-motion', !!prefs.get('reduceMotion', false));
+  // The system setting counts too, so the ripple, card tilt and smooth scrolling (done in JS) also calm down.
+  document.body.classList.toggle('reduce-motion', !!prefs.get('reduceMotion', false) || systemReducedMotion.matches);
   document.body.classList.toggle('high-contrast', !!prefs.get('highContrast', false));
 }
