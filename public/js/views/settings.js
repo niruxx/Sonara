@@ -239,7 +239,7 @@ export async function settingsView() {
         : 'No scan has run since Sonara started.'}</span></div>
         ${s.lastError ? html`<p class="muted" style="color:#fca5a5">${s.lastError}</p>` : ''}
         ${s.issueCount ? html`<button class="btn sm ghost" data-issues style="margin-top:8px">${ic('alert')} Show ${plural(s.issueCount, 'skipped file')}</button>` : ''}
-        ${s.watching ? html`<p class="muted" style="margin-top:8px;font-size:12px">${ic('check')} Watching folders for changes</p>` : ''}`);
+        ${s.watching ? html`<p class="muted inline-note">${ic('check')}<span>Watching folders for changes</span></p>` : ''}`);
     statusBox.querySelector('[data-issues]')?.addEventListener('click', showIssues);
     v.querySelectorAll('[data-scan], [data-scan-full]').forEach((b) => { b.disabled = s.running; });
   };
