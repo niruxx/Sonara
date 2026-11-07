@@ -1,7 +1,7 @@
 // Reusable view components: cards, track lists, track menus.
 import { html, ic, el, art, fmtTime, fmtBytes, plural, hues } from './util.js';
 import { player } from './player.js';
-import { openMenu, dragSort, modal, toastError } from './ui.js';
+import { openMenu, dragSort, modal, toast, toastError } from './ui.js';
 import { api } from './api.js';
 import { state, bus, toggleFavorite, setRating, createPlaylist, addToPlaylist } from './state.js';
 import { navigate } from './router.js';
@@ -85,6 +85,7 @@ export function trackMenu(at, track, { tracks = [track], extra = [] } = {}) {
     { icon: 'play', label: multi ? `Play ${tracks.length} songs` : 'Play', action: () => player.playList(tracks, 0) },
     { icon: 'playNext', label: 'Play next', action: () => player.playNext(tracks) },
     { icon: 'addQueue', label: 'Add to queue', action: () => player.addToQueue(tracks) },
+    ...(!multi ? [{ icon: 'radio', label: 'Start song radio', action: () => player.startRadio(`track:${track.id}`, track.title) }] : []),
     'sep',
     { icon: 'list', label: 'Add to playlist…', action: (e) => playlistPicker(at instanceof Element ? at : e, tracks) },
     ...(!multi ? [{ icon: track.favorite ? 'heartFill' : 'heart', label: track.favorite ? 'Remove from Favorites' : 'Add to Favorites', action: () => toggleFavorite(track) }] : []),
@@ -94,10 +95,46 @@ export function trackMenu(at, track, { tracks = [track], extra = [] } = {}) {
       ...(track.artists?.length > 1
         ? track.artists.map((a) => ({ icon: 'mic', label: `Go to ${a.name}`, action: () => navigate(`/artist/${a.id}`) }))
         : [{ icon: 'mic', label: 'Go to artist', action: () => navigate(`/artist/${track.artistId}`) }]),
-      { icon: 'info', label: 'Track details', action: () => trackDetails(track) }] : []),
+      { icon: 'info', label: 'Track details', action: () => trackDetails(track) },
+      ...(canShare() ? [{ icon: 'share', label: 'Share…', action: () => shareDialog('track', track.id, track.title) }] : []),
+      ...(canDownload() ? [{ icon: 'download', label: 'Download…', action: () => downloadDialog('track', track.id, track.title) }] : [])] : []),
     ...(fileMenuItems(tracks).length ? ['sep', ...fileMenuItems(tracks)] : []),
     ...(extra.length ? ['sep', ...extra] : []),
   ]);
+}
+
+// ───────── Downloads ─────────
+
+const DOWNLOAD_FORMATS = [
+  ['original', 'Original files', 'Exactly as stored (songs from cue sheets are cut out losslessly)'],
+  ['mp3-320', 'MP3 · 320 kbps', 'Plays everywhere'],
+  ['mp3-192', 'MP3 · 192 kbps', 'Smaller files'],
+  ['aac-256', 'AAC · 256 kbps', 'Great for Apple devices'],
+  ['opus-160', 'Opus · 160 kbps', 'Smallest at high quality'],
+  ['flac', 'FLAC', 'Lossless (lossy originals are kept as they are)'],
+];
+
+/** kind: 'track' | 'album' | 'playlist'. Albums and playlists download as a .zip. */
+export function downloadDialog(kind, id, name) {
+  return modal(html`
+    <h3>${ic('download')} Download ${kind === 'track' ? 'song' : kind}</h3>
+    <p>${kind === 'track' ? `“${name}”` : html`“${name}” downloads as a .zip file.`} Converted files take a moment to prepare.</p>
+    <div class="dl-options">${DOWNLOAD_FORMATS.map(([k, l, d], i) => html`
+      <label class="dl-option"><input type="radio" name="fmt" value="${k}" ${i === 0 ? 'checked' : ''}><span><b>${l}</b><span class="muted">${d}</span></span></label>`)}</div>
+    <div class="modal-actions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ic('download')} Download</button></div>`, (box, close) => {
+    box.querySelector('[data-go]').addEventListener('click', () => {
+      const v = box.querySelector('[name=fmt]:checked').value;
+      const [format, bitrate] = v === 'original' ? ['raw'] : v.split('-');
+      const a = document.createElement('a');
+      a.href = api.downloadUrl(kind, id, { format, bitrate });
+      a.download = '';
+      document.body.append(a);
+      a.click();
+      a.remove();
+      toast(kind === 'track' ? 'Download starting…' : 'Preparing your .zip, the download starts when it is ready…', { ms: 4000 });
+      close(true);
+    });
+  });
 }
 
 export function ratingMenu(at, track) {
@@ -132,6 +169,7 @@ export async function trackDetails(track) {
     ['Genres', t.genres?.join(', ')],
     ['Duration', fmtTime(t.duration)],
     ['Format', [t.format, t.codec].filter(Boolean).join(' · ')],
+    ['Playback', t.cue ? `Part of a cue sheet (${fmtTime(t.cueStart)}–${t.cueEnd != null ? fmtTime(t.cueEnd) : 'end'}), cut out by the server` : t.needsTranscode ? 'Converted by the server while playing (browsers can’t play this format)' : null],
     ['Bitrate', t.bitrate ? `${Math.round(t.bitrate / 1000)} kbps` : null],
     ['Sample rate', t.sampleRate ? `${(t.sampleRate / 1000).toFixed(1)} kHz` : null],
     ['Size', t.size ? fmtBytes(t.size) : null],
@@ -163,12 +201,79 @@ export async function trackDetails(track) {
 }
 
 export function playlistPicker(at, tracks) {
+  const editable = state.playlists.filter((pl) => pl.canEdit !== false);
+  if (!state.user.permissions?.playlists) return toast("You don't have permission to edit playlists", { type: 'error' });
   openMenu(at, [
     { head: 'Add to playlist' },
     { icon: 'plus', label: 'New playlist…', action: () => createPlaylist(tracks.map((t) => t.id)) },
-    ...(state.playlists.length ? ['sep'] : []),
-    ...state.playlists.map((pl) => ({ icon: 'listMusic', label: pl.name, action: () => addToPlaylist(pl, tracks) })),
+    ...(editable.length ? ['sep'] : []),
+    ...editable.map((pl) => ({ icon: pl.owned === false ? 'users' : 'listMusic', label: pl.owned === false ? `${pl.name} (${pl.owner})` : pl.name, action: () => addToPlaylist(pl, tracks) })),
   ]);
+}
+
+// ───────── Share links ─────────
+
+export const canShare = () => !!state.user.permissions?.share && state.sharing !== false;
+export const canDownload = () => !!state.user.permissions?.download;
+
+const EXPIRY = [[1, '1 day'], [7, '1 week'], [30, '30 days'], [365, '1 year'], [0, 'Never']];
+
+/** kind: 'track' | 'album' | 'playlist'. Creates a public link anyone can open without an account. */
+export function shareDialog(kind, id, name) {
+  return modal(html`
+    <h3>${ic('share')} Share ${kind === 'track' ? 'song' : kind}</h3>
+    <p>Anyone with the link can listen to “${name}”, without an account.${kind === 'playlist' ? ' It shows the playlist as it is when they open it.' : ''}</p>
+    <div class="share-form">
+      <label class="muted">Link expires after</label>
+      <div class="seg2" data-exp>${EXPIRY.map(([d, l]) => html`<button type="button" class="seg-btn ${d === 7 ? 'on' : ''}" data-days="${d}">${l}</button>`)}</div>
+      ${canDownload() ? html`<label class="check" style="margin-top:12px"><input type="checkbox" data-dl><span class="sw"></span>Allow downloading</label>` : ''}
+    </div>
+    <div class="share-result" hidden>
+      <div class="copy-row"><input class="input mono" readonly data-url><button class="btn sm primary" data-copy>${ic('copy')} Copy</button></div>
+      <p class="muted" data-exp-note style="margin-top:8px"></p>
+    </div>
+    <div class="form-error"></div>
+    <div class="modal-actions"><button class="btn ghost" data-close>Close</button><button class="btn primary" data-create>${ic('link')} Create link</button></div>`, (box) => {
+    let days = 7;
+    box.querySelector('[data-exp]').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-days]');
+      if (!b) return;
+      days = Number(b.dataset.days);
+      box.querySelectorAll('[data-days]').forEach((x) => x.classList.toggle('on', x === b));
+    });
+    const create = box.querySelector('[data-create]');
+    create.addEventListener('click', async () => {
+      create.disabled = true;
+      try {
+        const s = await api.post('/shares', { kind, id, expiresInDays: days, allowDownload: !!box.querySelector('[data-dl]')?.checked });
+        box.querySelector('.share-form').hidden = true;
+        box.querySelector('.share-result').hidden = false;
+        box.querySelector('[data-url]').value = s.url;
+        box.querySelector('[data-exp-note]').textContent = s.expiresAt ? `Expires ${new Date(s.expiresAt).toLocaleString()}. Manage your links in Settings.` : 'Never expires. Manage your links in Settings.';
+        create.hidden = true;
+        copyText(s.url);
+      } catch (err) {
+        box.querySelector('.form-error').textContent = err.message;
+        create.disabled = false;
+      }
+    });
+    box.querySelector('[data-copy]').addEventListener('click', () => copyText(box.querySelector('[data-url]').value));
+  });
+}
+
+export async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Link copied', { type: 'success', ms: 1600 });
+  } catch {
+    // Clipboard API needs HTTPS; fall back to a selection copy.
+    const t = el(html`<textarea style="position:fixed;opacity:0">${text}</textarea>`);
+    document.body.append(t);
+    t.select();
+    const ok = document.execCommand('copy');
+    t.remove();
+    toast(ok ? 'Link copied' : 'Copy the link from the box', { type: ok ? 'success' : 'info', ms: 2000 });
+  }
 }
 
 // ───────── Track list ─────────

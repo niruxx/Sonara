@@ -70,6 +70,8 @@ export async function inboxView() {
   </div>`);
 
   const $ = (s) => v.querySelector(s);
+  // Playable audio, plus formats the server converts on the fly (needs ffmpeg).
+  const importable = (f) => (f.kind === 'audio' && f.playable) || (f.kind === 'audio-unsupported' && !!t.ffmpeg);
   let files = data.files;
   let jobs = data.jobs;
   const selected = new Set();
@@ -85,13 +87,13 @@ export async function inboxView() {
     } else {
       box.innerHTML = String(html`<div class="inbox-list">${files.map((f) => html`
         <div class="inbox-row ${selected.has(f.name) ? 'selected' : ''}" data-name="${f.name}">
-          <input type="checkbox" class="pick" ${selected.has(f.name) ? 'checked' : ''} aria-label="Select" ${f.playable && f.kind === 'audio' ? '' : 'disabled'}>
+          <input type="checkbox" class="pick" ${selected.has(f.name) ? 'checked' : ''} aria-label="Select" ${importable(f) ? '' : 'disabled'}>
           <button class="icon-btn sm" data-act="preview" aria-label="Preview" ${f.playable ? '' : 'disabled'}>${ic(previewing === f.name ? 'pause' : KIND_ICON[f.kind] === 'music' ? 'play' : KIND_ICON[f.kind])}</button>
           <div class="grow ir-main">
             <div class="ir-title">${f.tags?.title || f.name}</div>
             <div class="ir-sub muted">${[f.tags?.artist, f.tags?.album].filter(Boolean).join(' · ') || f.name}</div>
           </div>
-          <span class="badge kind-${f.kind}">${f.kind === 'audio-unsupported' ? 'needs conversion' : f.kind}</span>
+          <span class="badge kind-${f.kind}" title="${f.kind === 'audio-unsupported' ? 'Browsers can’t play this format; Sonara converts it while it plays' : ''}">${f.kind === 'audio-unsupported' ? 'converted on play' : f.kind}</span>
           <span class="muted ir-meta">${f.duration ? fmtTime(f.duration) : ''}</span>
           <span class="muted ir-meta">${fmtBytes(f.size)}</span>
           ${f.kind !== 'audio' ? html`<button class="btn sm" data-act="convert" ${t.ffmpeg ? '' : 'disabled'}>${ic('film')} Convert</button>` : ''}
@@ -125,7 +127,7 @@ export async function inboxView() {
     if (act === 'convert') return convertInbox(f.name);
     if (act === 'more') {
       openMenu(e.target.closest('[data-act]'), [
-        ...(f.kind === 'audio' ? [{ icon: 'check', label: 'Add to library…', action: () => importDialog([f.name]) }] : []),
+        ...(importable(f) ? [{ icon: 'check', label: 'Add to library…', action: () => importDialog([f.name]) }] : []),
         ...(f.kind !== 'other' ? [{ icon: 'edit', label: 'Edit tags…', action: () => editInboxTags([f]) }] : []),
         ...(f.kind !== 'audio' ? [{ icon: 'film', label: 'Convert to audio', action: () => convertInbox(f.name) }] : []),
         { icon: 'edit', label: 'Rename…', action: () => renameFile(f) },
@@ -138,9 +140,9 @@ export async function inboxView() {
   audioEl.addEventListener('ended', () => { previewing = null; drawFiles(); });
 
   $('[data-select-all]').addEventListener('click', () => {
-    const importable = files.filter((f) => f.kind === 'audio' && f.playable);
-    if (importable.every((f) => selected.has(f.name))) selected.clear();
-    else importable.forEach((f) => selected.add(f.name));
+    const choices = files.filter((f) => importable(f));
+    if (choices.every((f) => selected.has(f.name))) selected.clear();
+    else choices.forEach((f) => selected.add(f.name));
     drawFiles();
   });
   $('[data-import]').addEventListener('click', () => importDialog([...selected]));

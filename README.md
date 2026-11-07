@@ -9,12 +9,21 @@
 - 🎛️ **Queue** with play next, add to queue, shuffle, repeat and drag-to-reorder. It's saved on the server, so you can pick up on another device.
 - 🎚️ **Gapless playback, crossfade and ReplayGain** volume normalization, a **10-band equalizer** with presets, playback speed and a sleep timer.
 - 🏷️ **Rich tags.** Multiple artists and "feat." credits, compilations, multi-genre tags, MusicBrainz IDs, original year and release type (album, EP, single, live...).
+- 🎤 **Synced lyrics** that scroll with the song, from `.lrc` files, embedded tags, or (optionally) [LRCLIB](https://lrclib.net).
+- ✨ **Smart playlists** built from rules, **radio** stations from any song, album, artist or genre, "Continue listening", "On this day" and "Rediscover" on the home page, and a **listening stats** page with a year in review.
+- 📡 **Scrobbling** to Last.fm and ListenBrainz, plus optional artist bios and photos (MusicBrainz, Wikipedia) and missing cover art (Cover Art Archive). Every online feature is off by default.
 - ⭐ **Ratings**, play counts, and sorting and filtering by year, genre, rating, plays and date added.
-- 🔐 **Multiple user accounts** with an admin role.
+- 📲 **Sonara Connect.** Control playback on one device from another, move what's playing between devices, cast to a **Chromecast** or **DLNA/UPnP speakers**, or play through the server's own speakers (**jukebox mode**).
+- 🎉 **Listening parties.** Share a link and friends with an account hear the same song at the same moment.
+- 🔗 **Share links** for songs, albums and playlists that work without an account, with expiry and optional downloads. Playlists can be **shared or collaborative**, and imported or exported as M3U, M3U8 or XSPF. `.m3u` files in your music folders become playlists automatically.
+- 🔐 **Multiple user accounts** with an admin role, per-user **permissions** and **folder access**, **two-factor sign-in**, and **single sign-on** (OpenID Connect) or reverse-proxy sign-in (Authelia, Authentik).
+- 🩺 **Easy to run.** Docker image, health check, Prometheus metrics, JSON logs, an in-app log viewer and scan history, backups and restore from the UI, and duplicate / missing-metadata reports.
 - ⌨️ **Keyboard shortcuts**, plus media keys and lock-screen controls (Media Session API).
 - 🔄 **Automatic library scanning.** Folders are watched, so changes show up within seconds, and a scheduled scan catches anything missed. Files that can't be read are listed in Settings.
-- 📱 **Works on phones.** The layout is responsive and the app can be installed as a PWA.
+- 📱 **Works on phones.** The layout is responsive and the app can be installed as a PWA. Save albums and playlists **for offline** and they play without a connection (needs HTTPS or localhost).
+- 🪟 **Mini player** in an always-on-top window (press **P**), colour **themes** or your own accent colour, and a **high-contrast** mode. Admins can **change album covers** by uploading, pasting a link, or picking a picture from the album folder.
 
+- 🔁 **Plays anything.** Formats browsers can't handle (ALAC, WMA, APE, WavPack, AIFF, DSD…) and single-file albums with a `.cue` sheet are converted on the fly. Lower the streaming quality to save mobile data, and download songs, albums or playlists as originals or converted.
 - 🗂️ **File management (admins).** Edit tags, move files, and organize folders by artist/album, genre, year or playlist from a template you can preview first.
 - ⬇️ **Inbox.** Download audio with [yt-dlp](https://github.com/yt-dlp/yt-dlp), convert videos to audio, or upload files. Everything waits in the Inbox until you tag it and choose where it goes.
 
@@ -26,7 +35,7 @@ It runs anywhere Node.js runs (Linux, macOS, Windows), uses an embedded SQLite d
 
 - **Node.js 22.13 or newer** (the installers can install it for you)
 - **git** (needed for updates)
-- Music in formats browsers can play: MP3, FLAC, M4A/AAC, OGG/Opus, WAV, WebM
+- Music in formats browsers can play: MP3, FLAC, M4A/AAC, OGG/Opus, WAV, WebM. With [ffmpeg](https://ffmpeg.org) installed, Sonara also plays ALAC, WMA, APE, WavPack, AIFF, DSD and cue-sheet albums by converting them while they play.
 
 ## Install
 
@@ -66,6 +75,15 @@ Options: `-Port 7700`, `-Music "D:\Music"`, `-NoService`, `-Yes`, and `-RunAs Sy
 - `System` (default) starts Sonara at boot, before anyone logs in.
 - `User` starts Sonara when you log in. Choose this if your music is on a **mapped drive or network share**, because the SYSTEM account can't see those.
 
+### Docker
+
+```bash
+docker compose up -d        # edit the music path in docker-compose.yml first
+```
+
+Or without compose: `docker build -t sonara . && docker run -d -p 7700:7700 -v sonara-data:/data -v /srv/music:/music:ro sonara`.
+The image includes ffmpeg and yt-dlp. Data lives in the `/data` volume; mount music read-write only if you want tag editing and organizing. For DLNA speakers and Chromecast, use `network_mode: host` so Sonara can be found on your LAN. `/api/health` is used as the container health check.
+
 ### First run
 
 Open `http://localhost:7700` (or `http://<server-ip>:7700` from another device). The first visit asks you to **create the admin account**. Then go to **Settings → Music folders** to add or browse for folders. The scan starts right away.
@@ -76,12 +94,21 @@ Some features use external programs. Sonara finds them on the `PATH`, and the re
 
 | Tool | Used for | Install |
 | --- | --- | --- |
-| [ffmpeg](https://ffmpeg.org) | Editing tags, converting video to audio, extracting audio from downloads | `sudo apt install ffmpeg`, `brew install ffmpeg`, `winget install ffmpeg` |
+| [ffmpeg](https://ffmpeg.org) | Playing formats browsers can't (and cue sheets), lower streaming bitrates, converted downloads, editing tags, converting video to audio | `sudo apt install ffmpeg`, `brew install ffmpeg`, `winget install ffmpeg` |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Downloading from YouTube and other sites | `pip install yt-dlp`, `brew install yt-dlp`, `winget install yt-dlp` |
 
 To use a copy that isn't on the `PATH`, set `"ffmpegPath"` or `"ytdlpPath"` in `data/config.json`.
 
 Changing files (editing tags, moving, organizing, importing from the Inbox) is **off by default**. Turn on **Settings → File management → Allow Sonara to change files** to use it. Downloads go to `data/downloads/` unless you choose another folder there. That folder must be outside your music folders.
+
+## Multi-device, sharing and sign-in
+
+- **Play on another device:** click the cast icon in the player bar. Other open Sonara tabs, the server speakers and DLNA speakers are listed there. Picking one moves what you're playing to it and turns this tab into a remote; **Play here** brings it back.
+- **Jukebox mode** (Settings → Sharing & speakers) needs [mpv](https://mpv.io) (recommended) or ffplay on the server. **Network speakers** are found with SSDP on the local network. Both are available to admins and to users given the "speakers" permission.
+- **Chromecast** works in Chrome and Edge when Sonara is opened over HTTPS (or on `localhost`), because browsers only allow casting from secure pages. The Chromecast fetches audio from Sonara directly, so set **Public address** if Sonara is behind a proxy.
+- **Single sign-on:** create an OpenID Connect client in your provider (Authentik, Authelia, Keycloak, …), use the redirect URI shown in Settings → Sign-in, and fill in the issuer, client ID and secret. **Proxy sign-in:** set the header your proxy sends (e.g. `Remote-User`) and the proxy's address; only requests from that address may use it.
+- **Restart and restore:** "Restart Sonara" exits with code 75 so systemd, launchd and Docker start it again. On Windows, restart the Scheduled Task by hand. A restore is applied on the next start, after the current database is saved to `data/backups/`.
+- **Metrics:** turn on Prometheus metrics in Settings → Operations and scrape `/metrics` (set a token to require `Authorization: Bearer <token>`).
 
 ## Update
 
@@ -118,7 +145,9 @@ This removes the service or Scheduled Task, the firewall rule and `node_modules`
 | `data/covers/` | Cover art cache (rebuilt automatically by a rescan) |
 | `data/logs/sonara.log` | Server log |
 | `data/downloads/` | The Inbox: downloads and conversions waiting to be filed |
-| `data/backups/` | Database snapshots taken before each update (or with `npm run backup`) |
+| `data/transcode-cache/` | Converted audio, reused on later plays (size limit in Settings) |
+| `data/backups/` | Database snapshots taken before each update, from the Server page, on a schedule, or with `npm run backup` |
+| `data/secret.key` | Random key that signs stream links for casting (keep it private) |
 
 To move the data elsewhere, set `SONARA_DATA_DIR=/path/to/data`.
 

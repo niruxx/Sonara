@@ -3,6 +3,8 @@ import { api, setUnauthorizedHandler } from './api.js';
 import { html, ic, el, art, fmtTime } from './util.js';
 import { player, eq } from './player.js';
 import { openEqualizer } from './eq.js';
+import { attachLyrics } from './lyrics.js';
+let lyricsPane = null;
 import { state, bus, refreshPlaylists, toggleFavorite, createPlaylist } from './state.js';
 import { route, match, onRoute, navigate, start as startRouter } from './router.js';
 import { dragSort, toastError, toast, openMenu } from './ui.js';
@@ -14,6 +16,14 @@ import { albumView, artistView, playlistsView, playlistView, favoritesView, sear
 import { settingsView, applyPrefs } from './views/settings.js';
 import { authView } from './views/auth.js';
 import { inboxView } from './views/inbox.js';
+import { statsView } from './views/stats.js';
+import { smartPlaylistView } from './views/smart.js';
+import { serverView } from './views/server.js';
+import { partyView } from './views/party.js';
+import { connect, startConnect, moveTo, controlDevice, playHere, castSupported, startCast, startParty, leaveParty, partyUrl, clientId } from './connect.js';
+import { copyText } from './components.js';
+import { registerServiceWorker } from './offline.js';
+import { toggleMiniPlayer, miniSupported } from './mini.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const rootEl = document.getElementById('root');
@@ -32,6 +42,10 @@ route('/playlist/:id', playlistView);
 route('/favorites', favoritesView);
 route('/settings', settingsView);
 route('/inbox', inboxView);
+route('/stats', statsView);
+route('/smart/:id', smartPlaylistView);
+route('/server', serverView);
+route('/party/:id', partyView);
 
 const NAV = [
   ['/', 'home', 'Home'],
@@ -46,6 +60,7 @@ const NAV = [
 
 async function boot() {
   applyPrefs();
+  registerServiceWorker();
   setUnauthorizedHandler(() => location.replace('/'));
   let status;
   try {
@@ -54,8 +69,9 @@ async function boot() {
     rootEl.replaceChildren(el(emptyState('alert', "Can't reach the Sonara server", 'Check that the service is running, then refresh.')));
     return;
   }
+  state.sharing = status.sharing;
   if (!status.user) {
-    rootEl.replaceChildren(authView({ setup: status.setupRequired, onDone: (u) => startApp(u) }));
+    rootEl.replaceChildren(authView({ setup: status.setupRequired, passwordLogin: status.passwordLogin, oidc: status.oidc, onDone: (u) => startApp(u) }));
     return;
   }
   startApp(status.user);
@@ -69,7 +85,9 @@ function startApp(user) {
   bindPlayerBar();
   bindQueue();
   bindNowPlaying();
+  lyricsPane = attachLyrics($('.np'));
   bindKeys();
+  bindDevices();
   attachSpectrum($('.np-canvas'));
   startVisualizer();
   refreshPlaylists();
@@ -80,6 +98,7 @@ function startApp(user) {
   onRoute(render);
   startRouter();
   player.restore(user);
+  startConnect();
 }
 
 // ───────────────────────── Layout ─────────────────────────
@@ -97,7 +116,9 @@ function shell() {
       <nav class="nav">
         <a class="nav-item" href="/favorites" data-nav="/favorites">${ic('heart')}<span>Favorites</span></a>
         <a class="nav-item" href="/playlists" data-nav="/playlists">${ic('listMusic')}<span>Playlists</span></a>
-        ${u.isAdmin ? html`<a class="nav-item" href="/inbox" data-nav="/inbox">${ic('download')}<span>Inbox</span></a>` : ''}
+        <a class="nav-item" href="/stats" data-nav="/stats">${ic('chart')}<span>Your stats</span></a>
+        ${u.isAdmin ? html`<a class="nav-item" href="/inbox" data-nav="/inbox">${ic('download')}<span>Inbox</span></a>
+          <a class="nav-item" href="/server" data-nav="/server">${ic('activity')}<span>Server</span></a>` : ''}
       </nav>
       <div class="nav-pl"></div>
       <div class="user-chip">
@@ -122,6 +143,8 @@ function shell() {
     </main>
 
     <footer class="playerbar">
+      <div class="pb-remote" hidden>${ic('cast')}<span data-remote-label></span><button class="btn sm ghost" data-play-here>Play here</button><button class="icon-btn sm" data-leave-remote aria-label="Stop controlling" title="Stop controlling">${ic('x')}</button></div>
+      <div class="pb-party" hidden>${ic('party')}<span data-party-label></span><button class="btn sm ghost" data-party-copy>Copy link</button><button class="btn sm ghost" data-party-leave>Leave</button></div>
       <div class="pb-track">
         <div class="pb-cover" data-open-np title="Now playing">${art(null, '')}<div class="expand">${ic('maximize')}</div></div>
         <div class="pb-meta"><div class="pb-title">Nothing playing</div><div class="pb-artist">Pick something you love</div></div>
@@ -143,9 +166,11 @@ function shell() {
       </div>
       <div class="pb-right">
         <button class="icon-btn sm hide-sm" data-open-np aria-label="Now playing" title="Now playing (F)">${ic('maximize')}</button>
+        ${miniSupported() ? html`<button class="icon-btn sm hide-sm" data-mini aria-label="Mini player" title="Mini player (P)">${ic('pip')}</button>` : ''}
         <button class="icon-btn sm hide-sm pb-extra" data-speed aria-label="Playback speed" title="Playback speed"><span class="pill-label">1×</span></button>
         <button class="icon-btn sm hide-sm" data-eq aria-label="Equalizer" title="Equalizer (E)">${ic('sliders')}</button>
         <button class="icon-btn sm hide-sm" data-sleep aria-label="Sleep timer" title="Sleep timer">${ic('moon')}</button>
+        <button class="icon-btn sm" data-devices aria-label="Devices" title="Play on another device">${ic('cast')}</button>
         <button class="icon-btn sm" data-queue aria-label="Queue" title="Queue (Q)">${ic('queue')}</button>
         <div class="volume">
           <button class="icon-btn sm" data-mute aria-label="Mute">${ic('volume')}</button>
@@ -165,7 +190,8 @@ function shell() {
 }
 
 const queueDrawer = () => html`<aside class="drawer" aria-label="Queue">
-  <div class="drawer-head"><h3>Queue</h3><div>
+  <div class="drawer-head"><h3>Queue</h3><div class="row-gap">
+    <span class="radio-chip" hidden>${ic('waves')}<span data-radio-label></span><button class="icon-btn sm" data-stop-radio aria-label="Stop radio" title="Stop radio">${ic('x')}</button></span>
     <button class="btn sm ghost" data-clear-q>Clear</button>
     <button class="icon-btn sm" data-close-q aria-label="Close">${ic('x')}</button></div></div>
   <div class="drawer-body"></div></aside>`;
@@ -176,9 +202,12 @@ const nowPlaying = () => html`<section class="np paused" aria-label="Now playing
   <div class="np-top">
     <button class="icon-btn" data-close-np aria-label="Close">${ic('chevronDown')}</button>
     <div class="label">Playing from your library<b data-np-album></b></div>
-    <button class="icon-btn" data-np-more aria-label="More">${ic('more')}</button>
+    <div class="row-gap">
+      <button class="icon-btn" data-np-lyrics aria-label="Lyrics" title="Lyrics (L)">${ic('mic')}</button>
+      <button class="icon-btn" data-np-more aria-label="More">${ic('more')}</button>
+    </div>
   </div>
-  <div class="np-stage"><div class="np-art">${art(null, '')}</div></div>
+  <div class="np-stage"><div class="np-art">${art(null, '')}</div><div class="np-lyrics" aria-live="off"></div></div>
   <div class="np-bottom">
     <div class="np-info">
       <div class="t"><div class="np-title">—</div><div class="np-artist"></div></div>
@@ -247,7 +276,8 @@ async function render(url, { scroll = 0 } = {}) {
 function bindSidebar() {
   const box = $('.nav-pl');
   const draw = (pls) => {
-    box.innerHTML = String(html`${pls.map((p) => html`<a class="nav-item" href="/playlist/${p.id}">
+    box.innerHTML = String(html`${state.smartPlaylists.map((p) => html`<a class="nav-item" href="/smart/${p.id}">
+      <div class="pl-thumb smart">${ic('sparkles')}</div><span>${p.name}</span></a>`)}${pls.map((p) => html`<a class="nav-item" href="/playlist/${p.id}">
       <div class="pl-thumb">${art(p.covers?.[0], p.name, 'playlist', 56)}</div><span>${p.name}</span></a>`)}`);
     box.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === location.pathname));
   };
@@ -259,6 +289,7 @@ function bindSidebar() {
   $('[data-logout]').addEventListener('click', async () => {
     player.pause();
     await api.post('/auth/logout').catch(() => {});
+    navigator.serviceWorker?.controller?.postMessage('clear-api');
     location.replace('/');
   });
   $('[data-back]').addEventListener('click', () => history.back());
@@ -341,6 +372,7 @@ function bindPlayerBar() {
   $('[data-pb-fav]', bar).addEventListener('click', () => player.current && toggleFavorite(player.current));
   bar.querySelectorAll('[data-open-np]').forEach((b) => b.addEventListener('click', () => player.current && toggleNowPlaying(true)));
   $('[data-queue]', bar).addEventListener('click', () => toggleQueue());
+  $('[data-mini]', bar)?.addEventListener('click', () => toggleMiniPlayer().catch((err) => toast(err.message, { type: 'error' })));
 
   // Playback speed
   const speed = $('[data-speed]', bar);
@@ -400,6 +432,97 @@ function bindPlayerBar() {
   });
 }
 
+// ───────────────────────── Devices (Connect, casting, parties) ─────────────────────────
+
+const KIND_ICON = { browser: 'laptop', jukebox: 'speaker', dlna: 'speaker', cast: 'cast' };
+
+function deviceLine(d) {
+  const s = d.state;
+  if (!s?.track) return d.kind === 'browser' ? 'Idle' : d.kind === 'jukebox' ? 'Server speakers' : 'Network speaker';
+  return `${s.playing ? 'Playing' : 'Paused'}: ${s.track.title} · ${s.track.artist}`;
+}
+
+function openDevices(anchor) {
+  const remote = player.remote;
+  const devs = connect.devices;
+  const localPlaying = !remote && player.local.current;
+  const items = [{ head: remote ? `Controlling ${remote.name}` : 'Play on' }];
+  items.push({
+    icon: remote ? 'laptop' : 'check',
+    label: `This browser${remote ? ' (play here)' : ''}`,
+    action: () => remote && playHere(),
+  });
+  for (const d of devs) {
+    const active = remote?.id === d.id;
+    items.push({
+      icon: active ? 'check' : KIND_ICON[d.kind] || 'speaker',
+      label: html`${d.name}<small class="menu-sub">${deviceLine(d)}</small>`,
+      action: () => {
+        if (active) return;
+        // Something playing here: move it over. Otherwise just take control of that device.
+        if (localPlaying) moveTo(d);
+        else controlDevice(d);
+      },
+    });
+  }
+  if (!devs.length) items.push({ icon: 'info', label: html`No other devices<small class="menu-sub">Open Sonara on your phone or another computer</small>` });
+  if (castSupported()) items.push('sep', { icon: 'cast', label: 'Cast to Chromecast…', action: () => startCast() });
+  items.push('sep');
+  const p = connect.party;
+  if (p) {
+    if (p.hostClient === clientId) {
+      items.push({ icon: 'link', label: 'Copy party link', action: () => copyText(partyUrl(p)) });
+      items.push({ icon: 'x', label: 'End listening party', danger: true, action: () => leaveParty({ end: true }) });
+    } else items.push({ icon: 'x', label: `Leave ${p.host}'s party`, action: () => leaveParty() });
+  } else if (!remote) {
+    items.push({ icon: 'party', label: html`Start a listening party<small class="menu-sub">Friends with an account listen along in sync</small>`, action: async () => {
+      const party = await startParty();
+      if (party) copyText(partyUrl(party));
+    } });
+  }
+  if (remote) items.push({ icon: 'x', label: `Stop controlling ${remote.name}`, action: () => player.leaveRemote() });
+  openMenu(anchor, items);
+}
+
+function bindDevices() {
+  const bar = $('.playerbar');
+  const btn = $('[data-devices]', bar);
+  btn.addEventListener('click', () => openDevices(btn));
+  const drawBtn = () => {
+    btn.classList.toggle('on', !!player.remote);
+    btn.classList.toggle('has-devices', connect.devices.length > 0);
+    btn.title = player.remote ? `Playing on ${player.remote.name}` : connect.devices.length ? `${connect.devices.length} other device${connect.devices.length === 1 ? '' : 's'} available` : 'Play on another device';
+  };
+  connect.on('devices', drawBtn);
+  const banner = $('.pb-remote', bar);
+  player.on('remote', (r) => {
+    banner.hidden = !r;
+    if (r) $('[data-remote-label]', banner).textContent = `Playing on ${r.name}`;
+    drawBtn();
+    if (!r && !player.current) {
+      $('.pb-meta', bar).innerHTML = String(html`<div class="pb-title">Nothing playing</div><div class="pb-artist">Pick something you love</div>`);
+    }
+  });
+  $('[data-play-here]', banner).addEventListener('click', () => playHere());
+  $('[data-leave-remote]', banner).addEventListener('click', () => player.leaveRemote());
+
+  const pbar = $('.pb-party', bar);
+  connect.on('party', (p) => {
+    pbar.hidden = !p;
+    document.body.classList.toggle('in-party', !!p);
+    if (!p) return;
+    const host = p.hostClient === clientId;
+    const n = p.members?.length || 0;
+    $('[data-party-label]', pbar).textContent = host
+      ? `Your listening party · ${n ? `${n} listening along` : 'share the link to invite people'}`
+      : `Listening along with ${p.host}${n > 1 ? ` and ${n - 1} other${n > 2 ? 's' : ''}` : ''}`;
+    $('[data-party-copy]', pbar).hidden = !host;
+    $('[data-party-leave]', pbar).textContent = host ? 'End' : 'Leave';
+  });
+  $('[data-party-copy]', pbar).addEventListener('click', () => connect.party && copyText(partyUrl(connect.party)));
+  $('[data-party-leave]', pbar).addEventListener('click', () => leaveParty({ end: connect.party?.hostClient === clientId }));
+}
+
 // ───────────────────────── Queue drawer ─────────────────────────
 
 const queueOpen = () => $('.drawer').classList.contains('open');
@@ -432,6 +555,12 @@ function bindQueue() {
   const d = $('.drawer');
   $('[data-close-q]', d).addEventListener('click', () => toggleQueue(false));
   $('[data-clear-q]', d).addEventListener('click', () => player.clearUpNext());
+  const chip = $('.radio-chip', d);
+  player.on('radio', (r) => {
+    chip.hidden = !r;
+    if (r) $('[data-radio-label]', chip).textContent = `${r.label} radio`;
+  });
+  $('[data-stop-radio]', d).addEventListener('click', () => { player.stopRadio(); toast('Radio stopped: the queue won’t refill any more'); });
   const body = $('.drawer-body', d);
   body.addEventListener('click', (e) => {
     const rm = e.target.closest('[data-q-rm]');
@@ -512,6 +641,8 @@ function bindKeys() {
       r: () => player.cycleRepeat(),
       f: () => player.current && toggleNowPlaying(),
       q: () => toggleQueue(),
+      p: () => miniSupported() && toggleMiniPlayer().catch(() => {}),
+      l: () => { if (player.current) { toggleNowPlaying(true); lyricsPane?.toggle(); } },
       e: async () => { await openEqualizer(); $('[data-eq]')?.classList.toggle('on', !!eq.enabled); },
       '/': () => { toggleNowPlaying(false); $('.search input').focus(); },
     }[k.length === 1 ? k.toLowerCase() : k];

@@ -11,11 +11,11 @@ import { parseFile } from 'music-metadata';
 import { downloadsDir } from './config.js';
 import { log } from './logger.js';
 import { run, requireTool } from './tools.js';
-import { AUDIO_EXT, scanFile, withWatchPaused } from './scanner.js';
+import { AUDIO_EXT, LIBRARY_EXT, TRANSCODE_EXT, scanFile, withWatchPaused } from './scanner.js';
 import { safeName, renderTemplate, assertInLibrary, musicRoots } from './files.js';
 
 export const VIDEO_EXT = new Set(['.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv', '.wmv', '.m4v', '.ts', '.mts', '.3gp', '.mpg', '.mpeg', '.ogv']);
-const OTHER_AUDIO_EXT = new Set(['.wma', '.aiff', '.aif', '.ape', '.wv', '.alac', '.ac3', '.mka', '.amr']);
+const OTHER_AUDIO_EXT = TRANSCODE_EXT;
 const MAX_JOBS_KEPT = 100;
 const CONCURRENCY = 2;
 
@@ -240,9 +240,23 @@ export async function queueConvert(source, opts = {}) {
     const out = await uniqueIn(inboxDir(), safeName(path.parse(source).name) + ext);
     const tmp = path.join(path.dirname(out), `.${path.basename(out)}.part${ext}`);
     // A frame of the video becomes the cover art for formats that support it.
-    const withCover = opts.cover !== false && ['.mp3', '.m4a', '.flac'].includes(ext);
-    const args = ['-hide_banner', '-nostats', '-y', '-i', source, '-map', '0:a:0', '-map_metadata', '0'];
-    if (withCover) args.push('-map', '0:v:0?', '-c:v', 'mjpeg', '-vf', 'scale=600:600:force_original_aspect_ratio=decrease', '-frames:v', '1', '-disposition:v', 'attached_pic');
+    // It is grabbed in a separate step: limiting video frames in the main
+    // conversion would make ffmpeg stop the whole output after one frame.
+    let coverJpg = null;
+    if (opts.cover !== false && ['.mp3', '.m4a', '.flac'].includes(ext)) {
+      coverJpg = path.join(path.dirname(out), `.${path.basename(out)}.cover.jpg`);
+      const at = duration > 10 ? Math.min(30, duration / 4) : 0; // skip black intro frames
+      const c = await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-ss', String(at), '-i', source, '-map', '0:v:0',
+        '-frames:v', '1', '-vf', 'scale=600:600:force_original_aspect_ratio=decrease', '-q:v', '3', coverJpg], { signal: job.abort.signal }).catch(() => null);
+      if (!c || c.code !== 0 || !fs.existsSync(coverJpg)) {
+        await fsp.unlink(coverJpg).catch(() => {});
+        coverJpg = null;
+      }
+    }
+    const args = ['-hide_banner', '-nostats', '-y', '-i', source];
+    if (coverJpg) args.push('-i', coverJpg);
+    args.push('-map', '0:a:0', '-map_metadata', '0');
+    if (coverJpg) args.push('-map', '1:v:0', '-c:v', 'copy', '-disposition:v:0', 'attached_pic', '-metadata:s:v', 'comment=Cover (front)');
     else args.push('-vn');
     args.push(...CONVERT_FORMATS[fmt].args(bitrate));
     if (ext === '.mp3') args.push('-id3v2_version', '3');
@@ -257,12 +271,9 @@ export async function queueConvert(source, opts = {}) {
         if (which === 'err') { job.log.push(line); if (job.log.length > 200) job.log.splice(0, 100); }
       },
     });
+    if (coverJpg) await fsp.unlink(coverJpg).catch(() => {});
     if (r.code !== 0) {
       await fsp.unlink(tmp).catch(() => {});
-      if (withCover && /attached_pic|mjpeg|Stream map/i.test(r.stderr)) {
-        // Some sources have odd video streams: retry without cover art.
-        return queueConvert(source, { ...opts, cover: false }).then(() => { job.status = 'done'; job.log.push('Retried without cover art.'); });
-      }
       throw new Error(r.stderr.trim().split('\n').filter((l) => !/^\s/.test(l)).pop() || `ffmpeg exited with code ${r.code}`);
     }
     await fsp.rename(tmp, out);
@@ -309,7 +320,7 @@ export async function importToLibrary(names, dest) {
       try {
         const from = inboxPath(name);
         const ext = path.extname(from).toLowerCase();
-        if (!AUDIO_EXT.has(ext)) throw new Error('Only playable audio files can be added. Convert it first.');
+        if (!LIBRARY_EXT.has(ext)) throw new Error('Only audio files can be added. Convert it first.');
         let to;
         if (dest.dir) to = path.join(path.resolve(dest.dir), path.basename(from));
         else {

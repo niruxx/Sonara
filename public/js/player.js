@@ -56,12 +56,12 @@ export const playback = {
   get preventClipping() { return prefs.get('rgClip', true); },
 };
 
-const deviceId = (() => {
+export const deviceId = (() => {
   let id = prefs.get('deviceId', null);
   if (!id) { id = Math.random().toString(36).slice(2, 10); prefs.set('deviceId', id); }
   return id;
 })();
-const deviceName = () => {
+export const deviceName = () => {
   const ua = navigator.userAgent;
   const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'Browser';
   const br = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
@@ -84,6 +84,11 @@ class Player extends Emitter {
   analyser = null;
   userId = null;
   #scrobbled = false;
+  #extScrobbled = false; // sent to Last.fm / ListenBrainz
+  #startedAt = 0;
+  #announced = null;     // track id we sent "now playing" for
+  #radioBusy = false;
+  radio = null;          // { seed, label } while a radio station is playing
   #errors = 0;
   #saveTimer = null;
   #syncTimer = null;
@@ -104,7 +109,15 @@ class Player extends Emitter {
       const on = (ev, fn) => d.addEventListener(ev, (e) => { if (d === this.audio) fn(e); });
       on('play', () => this.#state());
       on('pause', () => this.#state());
-      on('playing', () => { this.#errors = 0; this.#state(); });
+      on('playing', () => {
+        this.#errors = 0;
+        this.#state();
+        const t = this.current;
+        if (t && this.#announced !== t.id) {
+          this.#announced = t.id;
+          api.post(`/tracks/${t.id}/nowplaying`).catch(() => {});
+        }
+      });
       on('waiting', () => this.emit('state', this.playing, true));
       on('timeupdate', () => this.#onTime());
       on('durationchange', () => this.emit('time', this.time, this.duration));
@@ -122,17 +135,115 @@ class Player extends Emitter {
   /** The active <audio> element. */
   get audio() { return this.decks[this.active]; }
   get other() { return this.decks[1 - this.active]; }
-  get current() { return this.queue[this.index] || null; }
-  get playing() { return !this.audio.paused; }
-  get duration() { return Number.isFinite(this.audio.duration) ? this.audio.duration : this.current?.duration || 0; }
-  get time() { return this.audio.currentTime; }
-  get upNext() { return this.queue.slice(this.index + 1); }
+  // While controlling another device (Sonara Connect, casting), these describe *that* device.
+  get current() { return this.remote ? this.remote.state?.track || null : this.queue[this.index] || null; }
+  get playing() { return this.remote ? !!this.remote.state?.playing : !this.audio.paused; }
+  get duration() {
+    if (this.remote) return this.remote.state?.duration || this.remote.state?.track?.duration || 0;
+    return Number.isFinite(this.audio.duration) ? this.audio.duration : this.current?.duration || 0;
+  }
+  get time() {
+    if (!this.remote) return this.audio.currentTime;
+    const s = this.remote.state;
+    if (!s) return 0;
+    const t = s.playing ? s.time + (Date.now() - this.remote.receivedAt) / 1000 : s.time;
+    return Math.min(t, s.duration || t);
+  }
+  get upNext() { return this.remote ? [] : this.queue.slice(this.index + 1); }
+  /** This tab's own playback, regardless of remote mode. */
+  get local() {
+    return {
+      current: this.queue[this.index] || null, playing: !this.audio.paused, time: this.audio.currentTime, index: this.index, queueLength: this.queue.length,
+      duration: Number.isFinite(this.audio.duration) ? this.audio.duration : this.queue[this.index]?.duration || 0,
+    };
+  }
+
+  // ───────── Remote mode ─────────
+
+  remote = null;        // { id, name, kind, state, send(cmd, args), receivedAt }
+  localVolume = null;
+  #remoteTick = null;
+
+  enterRemote(target) {
+    if (this.remote) this.leaveRemote({ quiet: true });
+    this.pause();
+    this.localVolume = this.volume;
+    this.remote = target;
+    this.#remoteShown = false;
+    target.receivedAt = Date.now();
+    document.body.classList.add('remote-mode');
+    this.emit('remote', target);
+    if (target.state) this.remoteState(target.state);
+    else { this.emit('track', null); this.emit('state', false, false); }
+    clearInterval(this.#remoteTick);
+    this.#remoteTick = setInterval(() => { if (this.remote?.state?.playing) this.emit('time', this.time, this.duration); }, 500);
+  }
+
+  leaveRemote({ quiet = false } = {}) {
+    if (!this.remote) return;
+    const name = this.remote.name;
+    this.remote = null;
+    clearInterval(this.#remoteTick);
+    document.body.classList.remove('remote-mode');
+    if (this.localVolume != null) { this.volume = this.localVolume; this.localVolume = null; this.#applyVolume(); }
+    this.emit('remote', null);
+    this.emit('volume', this.volume, this.muted);
+    this.emit('track', this.current);
+    this.emit('state', this.playing, false);
+    this.emit('time', this.time, this.duration);
+    this.emit('queue');
+    if (!quiet) toast(`Stopped controlling ${name}`);
+  }
+
+  /** New state from the device we're controlling. */
+  remoteState(s) {
+    const r = this.remote;
+    if (!r) return;
+    const prevTrack = r.state?.track?.id;
+    r.state = s;
+    r.receivedAt = Date.now();
+    if (s?.track?.id !== prevTrack || !this.#remoteShown) { this.#remoteShown = true; this.emit('track', s?.track || null); this.#updateMediaSession(); }
+    this.emit('state', !!s?.playing, false);
+    this.emit('time', this.time, this.duration);
+    if (s && typeof s.volume === 'number' && Date.now() - this.#remoteVolAt > 1500) { this.volume = s.volume; this.emit('volume', this.volume, false); }
+    if (s?.repeat) { this.repeat = s.repeat; this.emit('mode'); }
+    this.emit('queue');
+  }
+  #remoteShown = false;
+  #remoteVolAt = 0;
+  #remoteVolTimer = null;
+
+  #send(cmd, args) {
+    this.remote?.send(cmd, args)?.catch?.(() => {});
+    // Optimistic update so the UI responds immediately.
+    const s = this.remote?.state;
+    if (!s) return;
+    if (cmd === 'pause') s.playing = false;
+    if (cmd === 'play') s.playing = true;
+    if (cmd === 'toggle') s.playing = !s.playing;
+    if (cmd === 'seek') { s.time = args.time; this.remote.receivedAt = Date.now(); }
+    this.emit('state', s.playing, false);
+    this.emit('time', this.time, this.duration);
+  }
 
   // ───────── Queue ─────────
 
-  /** Replace the queue and start playing at `start`. */
-  playList(tracks, start = 0, { shuffle = false } = {}) {
+  /** Replace the queue and start playing at `start`. `radio` keeps the queue topped up with similar songs. */
+  playList(tracks, start = 0, { shuffle = false, radio = null, time = 0, autoplay = true } = {}) {
     if (!tracks?.length) return;
+    if (this.remote) {
+      let ids = tracks.map((t) => t.id);
+      let index = Math.min(Math.max(0, start), ids.length - 1);
+      if (shuffle || this.shuffle) {
+        const first = shuffle && start === 0 ? Math.floor(Math.random() * ids.length) : index;
+        ids = [ids[first], ...shuffleArray(ids.filter((_, i) => i !== first))];
+        index = 0;
+      }
+      this.#send('playTracks', { ids, index, time });
+      return;
+    }
+    this.radio = radio;
+    this.emit('radio', radio);
     tracks = tracks.slice();
     this.original = tracks;
     if (shuffle) this.shuffle = true;
@@ -146,11 +257,18 @@ class Player extends Emitter {
       this.index = Math.min(Math.max(0, start), tracks.length - 1);
     }
     this.emit('mode');
-    this.#load(true);
+    this.#load(autoplay, time);
     this.#queueChanged();
   }
 
+  #remoteOnly(what) {
+    if (!this.remote) return false;
+    toast(`${what} isn't available while controlling ${this.remote.name}`);
+    return true;
+  }
+
   playNext(tracks) {
+    if (this.#remoteOnly('Play next')) return;
     tracks = [].concat(tracks);
     if (!this.current) return this.playList(tracks);
     this.queue.splice(this.index + 1, 0, ...tracks);
@@ -161,6 +279,7 @@ class Player extends Emitter {
   }
 
   addToQueue(tracks) {
+    if (this.#remoteOnly('Adding to the queue')) return;
     tracks = [].concat(tracks);
     if (!this.current) return this.playList(tracks);
     this.queue.push(...tracks);
@@ -170,6 +289,7 @@ class Player extends Emitter {
   }
 
   jump(i) {
+    if (this.remote) return this.#send('jump', { index: i });
     if (i < 0 || i >= this.queue.length) return;
     this.index = i;
     this.#load(true);
@@ -210,6 +330,7 @@ class Player extends Emitter {
   // ───────── Transport ─────────
 
   async play() {
+    if (this.remote) return this.#send('play');
     if (!this.current) return;
     this.#ensureAudioGraph();
     try {
@@ -219,12 +340,14 @@ class Player extends Emitter {
     }
   }
   pause() {
+    if (this.remote) return this.#send('pause');
     this.#cancelTransition(true);
     this.audio.pause();
   }
   toggle() { this.playing ? this.pause() : this.play(); }
 
   next(auto = false) {
+    if (this.remote) return auto ? undefined : this.#send('next');
     if (!this.queue.length) return;
     if (this.index < this.queue.length - 1) this.index++;
     else if (this.repeat === 'all' || !auto) this.index = 0;
@@ -234,6 +357,7 @@ class Player extends Emitter {
   }
 
   prev() {
+    if (this.remote) return this.#send('prev');
     if (this.audio.currentTime > 3 || this.index <= 0) { this.seek(0); return; }
     this.index--;
     this.#load(true);
@@ -241,12 +365,42 @@ class Player extends Emitter {
   }
 
   seek(sec) {
+    if (this.remote) return this.#send('seek', { time: Math.max(0, sec) });
     if (!this.current) return;
     this.#cancelTransition(true);
-    this.audio.currentTime = Math.max(0, Math.min(sec, this.duration || sec));
+    const target = Math.max(0, Math.min(sec, this.duration || sec));
+    const a = this.audio;
+    // A stream that is still being transcoded can't seek yet: reload it once the
+    // server has the whole file (wait=1) and jump to the position then.
+    if (!this.#seekable(target) && a.src && this.current) {
+      const wasPlaying = this.playing;
+      a.src = api.streamUrl(this.current.id, { wait: 1 });
+      a.addEventListener('loadedmetadata', () => {
+        a.currentTime = target;
+        if (wasPlaying) a.play().catch(() => {});
+      }, { once: true });
+      this.emit('state', this.playing, true);
+      return;
+    }
+    a.currentTime = target;
+  }
+
+  #seekable(t) {
+    const r = this.audio.seekable;
+    if (!r || !r.length) return t === 0;
+    for (let i = 0; i < r.length; i++) if (t >= r.start(i) && t <= r.end(i) + 0.5) return true;
+    return false;
   }
 
   setVolume(v) {
+    if (this.remote) {
+      this.volume = clamp(v, 0, 1);
+      this.#remoteVolAt = Date.now();
+      this.emit('volume', this.volume, false);
+      clearTimeout(this.#remoteVolTimer);
+      this.#remoteVolTimer = setTimeout(() => this.remote?.send('volume', { value: this.volume })?.catch?.(() => {}), 150);
+      return;
+    }
     this.volume = clamp(v, 0, 1);
     if (this.muted && v > 0) this.muted = false;
     this.#volumeChanged();
@@ -278,6 +432,7 @@ class Player extends Emitter {
   }
 
   toggleShuffle() {
+    if (this.remote) return this.remote.kind === 'browser' ? this.#send('shuffle') : this.#remoteOnly('Shuffle');
     this.shuffle = !this.shuffle;
     const cur = this.current;
     if (cur) {
@@ -295,6 +450,12 @@ class Player extends Emitter {
   }
 
   cycleRepeat() {
+    if (this.remote) {
+      const value = { off: 'all', all: 'one', one: 'off' }[this.repeat];
+      this.repeat = value;
+      this.emit('mode');
+      return this.#send('repeat', { value });
+    }
     this.repeat = { off: 'all', all: 'one', one: 'off' }[this.repeat];
     this.#preloaded = null;
     this.emit('mode');
@@ -385,6 +546,7 @@ class Player extends Emitter {
   #loop() {
     clearInterval(this.#tick);
     this.#tick = setInterval(() => {
+      if (this.remote) return;
       if (!this.playing && !this.#transition) return;
       this.#stepTransition();
       const a = this.audio;
@@ -419,6 +581,8 @@ class Player extends Emitter {
     this.#applyVolume();
     to.play().catch((err) => err.name !== 'AbortError' && console.warn(err));
     this.#scrobbled = false;
+    this.#extScrobbled = false;
+    this.#startedAt = Date.now();
     this.emit('track', this.current);
     this.#updateMediaSession();
     this.#queueChanged();
@@ -474,6 +638,8 @@ class Player extends Emitter {
     if (!t) return;
     this.#cancelTransition(true);
     this.#scrobbled = false;
+    this.#extScrobbled = false;
+    this.#startedAt = Date.now();
     const pre = this.#preloaded;
     this.#preloaded = null;
     if (pre && pre.track === t) {
@@ -484,7 +650,8 @@ class Player extends Emitter {
     } else {
       this.other.pause();
       this.other.removeAttribute('src');
-      this.audio.src = api.streamUrl(t.id);
+      // Resuming mid-song: ask for the complete file so seeking works on transcoded streams too.
+      this.audio.src = api.streamUrl(t.id, startAt ? { wait: 1 } : {});
     }
     this.audio._track = t;
     this.audio.playbackRate = this.rate;
@@ -499,6 +666,7 @@ class Player extends Emitter {
   }
 
   #state() {
+    if (this.remote) { this.#save(); return; }
     document.body.classList.toggle('playing', this.playing);
     this.emit('state', this.playing, false);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = this.playing ? 'playing' : 'paused';
@@ -508,12 +676,18 @@ class Player extends Emitter {
   }
 
   #onTime() {
+    if (this.remote) return;
     const a = this.audio;
     this.emit('time', a.currentTime, this.duration);
     const d = this.duration;
     if (!this.#scrobbled && d && a.currentTime >= Math.min(30, d / 2)) {
       this.#scrobbled = true;
       api.post(`/tracks/${this.current.id}/play`).catch(() => {});
+    }
+    // Last.fm / ListenBrainz rule: longer than 30 s, and played for half its length or 4 minutes.
+    if (!this.#extScrobbled && d >= 30 && a.currentTime >= Math.min(240, d / 2)) {
+      this.#extScrobbled = true;
+      api.post(`/tracks/${this.current.id}/scrobble`, { startedAt: this.#startedAt }).catch(() => {});
     }
     if ('mediaSession' in navigator && d && navigator.mediaSession.setPositionState) {
       try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(a.currentTime, d), playbackRate: a.playbackRate }); } catch { /* ignore */ }
@@ -523,6 +697,7 @@ class Player extends Emitter {
   }
 
   #onEnded() {
+    if (this.remote) return;
     if (this.sleep?.endOfTrack) {
       this.sleep = null;
       this.emit('sleep', null);
@@ -536,13 +711,55 @@ class Player extends Emitter {
   }
 
   #onError() {
+    if (this.remote) return;
     if (!this.audio.src || !this.current) return;
     this.#errors++;
     toast(`Couldn't play “${this.current.title}”`, { type: 'error' });
     if (this.#errors < 5 && this.index < this.queue.length - 1) setTimeout(() => this.next(true), 800);
   }
 
+  /** Start a radio station from a seed like 'track:12', 'artist:<id>', 'album:<id>' or 'genre:Rock'. */
+  async startRadio(seed, label) {
+    try {
+      const list = await api.get('/radio', { seed, limit: 40 });
+      if (!list.length) return toast('Not enough music to start a radio station yet', { type: 'error' });
+      // A song or album radio starts with the seed itself.
+      let first = [];
+      if (seed.startsWith('track:')) {
+        const [t] = await api.post('/tracks/lookup', { ids: [Number(seed.slice(6))] });
+        if (t) first = [t];
+      }
+      this.shuffle = false;
+      this.playList([...first, ...list], 0, { radio: { seed, label } });
+      toast(`${label} radio`, { type: 'success' });
+    } catch (err) { toast(err.message, { type: 'error' }); }
+  }
+
+  stopRadio() {
+    this.radio = null;
+    this.emit('radio', null);
+  }
+
+  /** Keep a radio queue from running dry. */
+  async #topUpRadio() {
+    if (!this.radio || this.#radioBusy || this.queue.length - this.index > 6) return;
+    this.#radioBusy = true;
+    const radio = this.radio;
+    try {
+      const exclude = this.queue.slice(-300).map((t) => t.id).join(',');
+      const more = await api.get('/radio', { seed: radio.seed, limit: 25, exclude });
+      if (this.radio !== radio || !more.length) return;
+      this.queue.push(...more);
+      this.original.push(...more);
+      this.emit('queue');
+      this.#save();
+    } catch { /* try again on the next track */ } finally {
+      this.#radioBusy = false;
+    }
+  }
+
   #queueChanged() {
+    this.#topUpRadio();
     // The next track may have changed: re-check what's buffered.
     const n = this.#peekNext();
     if (this.#preloaded && this.#preloaded.track !== n?.track) this.#preloaded = null;

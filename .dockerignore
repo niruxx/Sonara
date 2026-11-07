@@ -1,0 +1,8 @@
+node_modules
+data
+.git
+.vscode
+.idea
+*.log
+.DS_Store
+Thumbs.db

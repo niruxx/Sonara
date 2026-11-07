@@ -10,15 +10,21 @@ import { parseFile, selectCover } from 'music-metadata';
 import { db, q, tx } from './db.js';
 import { COVERS_DIR, getConfig } from './config.js';
 import { log } from './logger.js';
+import { tools } from './tools.js';
+import { parseCue, resolveCueAudio, cueTrackPath } from './cue.js';
+import { PLAYLIST_EXT, syncFolderPlaylists } from './playlists.js';
 
 // Formats browsers can actually play.
 export const AUDIO_EXT = new Set(['.mp3', '.flac', '.m4a', '.mp4', '.aac', '.ogg', '.oga', '.opus', '.wav', '.webm']);
 const FOLDER_ART = ['cover', 'folder', 'front', 'album', 'albumart'];
 const ARTIST_ART = ['artist', 'artist-image', 'artistimage'];
-const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
+export const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 const CONCURRENCY = 4;
-// Audio files we recognise but can't play yet (they need transcoding, see ROADMAP stage 2).
-const UNSUPPORTED_EXT = new Set(['.wma', '.ape', '.wv', '.aiff', '.aif', '.dsf', '.dff', '.mpc', '.tta', '.alac', '.ac3', '.dts', '.mka']);
+// Formats browsers can't play: added to the library when ffmpeg is available and transcoded when played.
+export const TRANSCODE_EXT = new Set(['.wma', '.ape', '.wv', '.aiff', '.aif', '.aifc', '.dsf', '.dff', '.mpc', '.tta', '.alac', '.ac3', '.dts', '.mka', '.amr', '.au', '.caf']);
+/** Every audio file the library can hold. */
+export const LIBRARY_EXT = new Set([...AUDIO_EXT, ...TRANSCODE_EXT]);
+const UNSUPPORTED_EXT = TRANSCODE_EXT;
 const MAX_ISSUES = 300;
 
 const state = {
@@ -52,6 +58,9 @@ function addIssue(file, reason, kind) {
 export const idOf = (...parts) =>
   crypto.createHash('sha1').update(parts.map((p) => String(p).trim().toLowerCase()).join('\u0000')).digest('hex').slice(0, 16);
 
+// Per-scan context (is ffmpeg available?).
+const scanCtx = { ffmpeg: false };
+
 async function* walk(dir) {
   let handle;
   try {
@@ -66,16 +75,25 @@ async function* walk(dir) {
     if (entry.isDirectory()) yield* walk(full);
     else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
-      if (AUDIO_EXT.has(ext)) yield full;
-      else if (UNSUPPORTED_EXT.has(ext)) {
-        state.skipped++;
-        addIssue(full, `${ext.slice(1).toUpperCase()} files can't be played in browsers yet`, 'skipped');
+      if (AUDIO_EXT.has(ext) || ext === '.cue' || PLAYLIST_EXT.has(ext)) yield full;
+      else if (TRANSCODE_EXT.has(ext)) {
+        if (scanCtx.ffmpeg) yield full;
+        else {
+          state.skipped++;
+          addIssue(full, `${ext.slice(1).toUpperCase()} files need ffmpeg to be played. Install ffmpeg and rescan.`, 'skipped');
+        }
       }
     }
   }
 }
 
-function saveCover(data, format) {
+/** Covers picked in the UI win over embedded / folder art. */
+export function applyCoverOverrides() {
+  q(`UPDATE tracks SET cover = (SELECT o.cover FROM cover_overrides o WHERE o.album_id = tracks.album_id)
+    WHERE album_id IN (SELECT album_id FROM cover_overrides)`).run();
+}
+
+export function saveCover(data, format) {
   const ext = /png/i.test(format) ? 'png' : /webp/i.test(format) ? 'webp' : 'jpg';
   const name = `${crypto.createHash('sha1').update(data).digest('hex')}.${ext}`;
   const file = path.join(COVERS_DIR, name);
@@ -224,7 +242,11 @@ async function readTrack(file, stat) {
     bitrate: f.bitrate ? Math.round(f.bitrate) : null,
     sample_rate: f.sampleRate ?? null,
     codec: f.codec ?? f.container ?? null,
-    lossless: f.lossless ? 1 : 0,
+    lossless: f.lossless || /alac|ape|wavpack|tta|dsd|pcm/i.test(String(f.codec || '')) ? 1 : 0,
+    needs_transcode: TRANSCODE_EXT.has(path.extname(file).toLowerCase()) || /alac/i.test(String(f.codec || '')) ? 1 : 0,
+    cue_file: null,
+    cue_start: null,
+    cue_end: null,
     cover,
     original_year: c.originalyear ?? (c.originaldate ? Number.parseInt(c.originaldate, 10) || null : null),
     release_type: releaseType(c, compilation),
@@ -242,16 +264,68 @@ async function readTrack(file, stat) {
     _genres: genres,
     _artistImage: albumArtist === VARIOUS ? null : await artistImage(dir),
     _albumArtistId: albumArtistId,
+    _albumTagged: !!albumArtistRaw,
   };
 }
 
 const COLS = ['path', 'mtime', 'size', 'title', 'artist', 'artist_id', 'album', 'album_id', 'album_artist',
   'album_artist_id', 'track_no', 'disc_no', 'year', 'genre', 'duration', 'bitrate', 'sample_rate', 'codec', 'lossless', 'cover',
   'original_year', 'release_type', 'compilation', 'mbz_track_id', 'mbz_album_id', 'mbz_artist_id',
-  'rg_track_gain', 'rg_track_peak', 'rg_album_gain', 'rg_album_peak'];
+  'rg_track_gain', 'rg_track_peak', 'rg_album_gain', 'rg_album_peak', 'needs_transcode', 'cue_file', 'cue_start', 'cue_end'];
+
+/**
+ * Split a single-file album into one row per cue track. The rows share the
+ * real file (cue_file) and carry their start/end offsets.
+ */
+function cueRows(base, sheet, cueStat) {
+  const tracks = sheet.files[0].tracks;
+  const albumPerformer = sheet.performer || base.album_artist;
+  const album = sheet.title || base.album;
+  const albumArtist = base._albumTagged ? base.album_artist : albumPerformer;
+  const albumArtists = albumArtist === VARIOUS ? [VARIOUS] : uniqBy(splitArtists(albumArtist), (x) => x.toLowerCase());
+  const albumArtistId = idOf(albumArtists[0] || albumArtist);
+  const year = base.year ?? (Number.parseInt(sheet.date, 10) || null);
+  const genres = base._genres.length ? base._genres : sheet.genre ? [sheet.genre] : [];
+  return tracks.map((t, i) => {
+    const end = tracks[i + 1]?.start ?? base.duration ?? null;
+    const performer = t.performer || albumPerformer || base.artist;
+    const artistList = uniqBy(splitArtists(performer), (x) => x.toLowerCase());
+    return {
+      ...base,
+      path: cueTrackPath(base.path, t.no),
+      mtime: Math.max(base.mtime, Math.floor(cueStat.mtimeMs)),
+      title: t.title || `Track ${t.no}`,
+      artist: performer,
+      artist_id: idOf(artistList[0] || performer),
+      album,
+      album_id: base.mbz_album_id ? idOf('mbz', base.mbz_album_id) : idOf(albumArtist, album),
+      album_artist: albumArtist,
+      album_artist_id: albumArtistId,
+      track_no: t.no,
+      year,
+      genre: genres[0] ?? null,
+      duration: end != null ? Math.max(0, end - t.start) : null,
+      // A segment of the file can only be served by cutting it out with ffmpeg.
+      needs_transcode: 1,
+      cue_file: base.path,
+      cue_start: t.start,
+      cue_end: end,
+      mbz_track_id: null,
+      rg_track_gain: null,
+      rg_track_peak: null,
+      _artists: artistList.length ? artistList : [performer],
+      _albumArtists: albumArtists,
+      _albumArtistId: albumArtistId,
+      _genres: genres,
+    };
+  });
+}
 
 function upsert(rows) {
-  const insert = q(`INSERT INTO tracks (${COLS.join(', ')}, added_at) VALUES (${COLS.map((c) => '$' + c).join(', ')}, $added_at)
+  // Albums without art in the files keep a cover found online (cover_lookups).
+  const ONLINE_COVER = '(SELECT cover FROM cover_lookups WHERE album_id = $album_id AND found = 1)';
+  const insert = q(`INSERT INTO tracks (${COLS.join(', ')}, added_at)
+    VALUES (${COLS.map((c) => (c === 'cover' ? `COALESCE($cover, ${ONLINE_COVER})` : '$' + c)).join(', ')}, $added_at)
     ON CONFLICT(path) DO UPDATE SET ${COLS.filter((c) => c !== 'path').map((c) => `${c} = excluded.${c}`).join(', ')}
     RETURNING id`);
   const clearArtists = q('DELETE FROM track_artists WHERE track_id = ?');
@@ -283,10 +357,11 @@ export async function scanLibrary({ full = false } = {}) {
   const roots = getConfig().musicDirs.map((d) => path.resolve(d));
   Object.assign(state, {
     running: true, phase: 'discovering', found: 0, processed: 0, added: 0, updated: 0,
-    removed: 0, errors: 0, current: '', startedAt: Date.now(), finishedAt: null, lastError: null, skipped: 0, issues: [],
+    removed: 0, errors: 0, current: '', startedAt: Date.now(), finishedAt: null, lastError: null, skipped: 0, issues: [], playlists: 0,
   });
   folderArtCache.clear();
   artistArtCache.clear();
+  scanCtx.ffmpeg = !!(await tools(true).catch(() => ({}))).ffmpeg;
   log.info(`[scan] Starting ${full ? 'full ' : ''}scan of ${roots.length} folder(s)`);
 
   try {
@@ -294,6 +369,8 @@ export async function scanLibrary({ full = false } = {}) {
     const seen = new Set();
     const reachable = [];
     const todo = [];
+    const cues = [];
+    const playlistFiles = [];
 
     for (const root of roots) {
       if (!fs.existsSync(root)) {
@@ -302,9 +379,30 @@ export async function scanLibrary({ full = false } = {}) {
       }
       reachable.push(root);
       for await (const file of walk(root)) {
+        if (file.toLowerCase().endsWith('.cue')) { cues.push(file); continue; }
+        if (PLAYLIST_EXT.has(path.extname(file).toLowerCase())) { playlistFiles.push(file); continue; }
         state.found++;
         seen.add(file);
         todo.push(file);
+      }
+    }
+
+    // Cue sheets: a single audio file described by a .cue becomes one track per cue entry.
+    const cueFor = new Map(); // audio path -> { cue, sheet }
+    for (const cue of cues) {
+      try {
+        const sheet = parseCue(cue);
+        const audio = resolveCueAudio(cue, sheet, todo);
+        if (!audio) continue;
+        if (sheet.files[0].tracks.length > 0 && !scanCtx.ffmpeg) {
+          addIssue(audio, 'Has a cue sheet, but splitting it into tracks needs ffmpeg. Added as one long track.', 'skipped');
+          continue;
+        }
+        cueFor.set(audio, { cue, sheet });
+        seen.delete(audio);
+        for (const t of sheet.files[0].tracks) seen.add(cueTrackPath(audio, t.no));
+      } catch (err) {
+        addIssue(cue, `Could not read cue sheet: ${err.message}`, 'error');
       }
     }
 
@@ -317,13 +415,25 @@ export async function scanLibrary({ full = false } = {}) {
         state.current = file;
         try {
           const stat = await fsp.stat(file);
-          const prev = known.get(file);
-          if (!full && prev && prev.mtime === Math.floor(stat.mtimeMs) && prev.size === stat.size) {
-            state.processed++;
-            continue;
+          const cue = cueFor.get(file);
+          if (cue) {
+            const cueStat = await fsp.stat(cue.cue);
+            const first = cueTrackPath(file, cue.sheet.files[0].tracks[0].no);
+            const prev = known.get(first);
+            const mtime = Math.max(Math.floor(stat.mtimeMs), Math.floor(cueStat.mtimeMs));
+            if (!full && prev && prev.mtime === mtime && prev.size === stat.size) { state.processed++; continue; }
+            const rows = cueRows(await readTrack(file, stat), cue.sheet, cueStat);
+            batch.push(...rows);
+            prev ? state.updated++ : state.added += rows.length;
+          } else {
+            const prev = known.get(file);
+            if (!full && prev && prev.mtime === Math.floor(stat.mtimeMs) && prev.size === stat.size) {
+              state.processed++;
+              continue;
+            }
+            batch.push(await readTrack(file, stat));
+            prev ? state.updated++ : state.added++;
           }
-          batch.push(await readTrack(file, stat));
-          prev ? state.updated++ : state.added++;
         } catch (err) {
           state.errors++;
           state.lastError = `${path.basename(file)}: ${err.message}`;
@@ -358,6 +468,9 @@ export async function scanLibrary({ full = false } = {}) {
       }
     });
     q(`DELETE FROM artist_images WHERE artist_id NOT IN (SELECT album_artist_id FROM tracks)`).run();
+    applyCoverOverrides();
+    state.phase = 'playlists';
+    try { state.playlists = syncFolderPlaylists(playlistFiles, reachable); } catch (err) { log.warn('[scan] Playlist import failed:', err.message); }
     db.exec('PRAGMA optimize');
     log.info(`[scan] Done: ${state.found} files, +${state.added} new, ${state.updated} updated, -${state.removed} removed, ${state.errors} errors, ${state.skipped} unsupported`);
   } catch (err) {
@@ -365,7 +478,15 @@ export async function scanLibrary({ full = false } = {}) {
     log.error('[scan] Scan failed', err);
   } finally {
     Object.assign(state, { running: false, phase: 'idle', current: '', finishedAt: Date.now() });
+    try {
+      q(`INSERT INTO scan_history (started_at, finished_at, full, found, added, updated, removed, errors, skipped, playlists, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(state.startedAt, state.finishedAt, full ? 1 : 0, state.found, state.added, state.updated,
+        state.removed, state.errors, state.skipped, state.playlists || 0, state.lastError);
+      q('DELETE FROM scan_history WHERE id <= (SELECT MAX(id) - 200 FROM scan_history)').run();
+    } catch (err) { log.warn('[scan] Could not save scan history:', err.message); }
   }
+  // Optional: look up art for albums that still have none.
+  if (getConfig().onlineCovers) import('./metadata.js').then((m) => m.findMissingCovers()).catch(() => {});
   if (rescanPending) {
     rescanPending = false;
     setTimeout(() => scanLibrary(), 1000).unref?.();
@@ -395,6 +516,8 @@ export async function withWatchPaused(fn) {
 
 /** Read (or re-read) a single file into the library. Returns the track id. */
 export async function scanFile(file) {
+  // Files split by a cue sheet are only handled by the full scan.
+  if (q('SELECT 1 FROM tracks WHERE cue_file = ? LIMIT 1').get(file)) return null;
   const stat = await fsp.stat(file);
   const dir = path.dirname(file);
   folderArtCache.delete(dir);
@@ -402,6 +525,7 @@ export async function scanFile(file) {
   artistArtCache.delete(path.dirname(dir));
   const row = await readTrack(file, stat);
   upsert([row]);
+  applyCoverOverrides();
   return q('SELECT id FROM tracks WHERE path = ?').get(file)?.id;
 }
 
@@ -412,7 +536,7 @@ function onFsChange(filename) {
     if (name.startsWith('.')) return;
     const ext = path.extname(name).toLowerCase();
     // Ignore files we don't care about, but react to folders (no extension) being moved or deleted.
-    if (ext && !AUDIO_EXT.has(ext) && !IMAGE_EXT.includes(ext) && !UNSUPPORTED_EXT.has(ext)) return;
+    if (ext && !AUDIO_EXT.has(ext) && !IMAGE_EXT.includes(ext) && !UNSUPPORTED_EXT.has(ext) && ext !== '.cue' && !PLAYLIST_EXT.has(ext)) return;
   }
   clearTimeout(watchTimer);
   watchTimer = setTimeout(() => {

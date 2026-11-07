@@ -13,7 +13,7 @@ import { q } from './db.js';
 import { getConfig } from './config.js';
 import { log } from './logger.js';
 import { run, requireTool } from './tools.js';
-import { AUDIO_EXT, scanFile, withWatchPaused } from './scanner.js';
+import { LIBRARY_EXT, scanFile, withWatchPaused } from './scanner.js';
 
 const SIDECAR_IMAGES = ['.jpg', '.jpeg', '.png', '.webp'];
 
@@ -150,7 +150,7 @@ async function pruneEmpty(dir) {
 }
 
 const hasAudio = async (dir) => {
-  try { return (await fsp.readdir(dir)).some((f) => AUDIO_EXT.has(path.extname(f).toLowerCase())); } catch { return false; }
+  try { return (await fsp.readdir(dir)).some((f) => LIBRARY_EXT.has(path.extname(f).toLowerCase())); } catch { return false; }
 };
 
 /**
@@ -285,8 +285,10 @@ export async function writeTags(file, tags) {
  * Only keys present in `tags` change; null clears a tag.
  */
 export async function editTracks(ids, tags) {
-  const rows = ids.map((id) => q('SELECT id, path FROM tracks WHERE id = ?').get(id)).filter(Boolean);
-  const failed = [];
+  const all = ids.map((id) => q('SELECT id, path, cue_file FROM tracks WHERE id = ?').get(id)).filter(Boolean);
+  // Songs cut from one file by a cue sheet share that file: their info lives in the .cue.
+  const failed = all.filter((r) => r.cue_file).map((r) => ({ id: r.id, path: r.cue_file, error: 'Part of a cue sheet; edit the .cue file instead' }));
+  const rows = all.filter((r) => !r.cue_file);
   await withWatchPaused(async () => {
     for (const r of rows) {
       try {
@@ -302,7 +304,12 @@ export async function editTracks(ids, tags) {
 
 /** Resolve an organize scope to track rows. */
 export function scopeTracks(scope) {
-  const cols = 'id, path, title, artist, album, album_id, album_artist, track_no, disc_no, year, genre, release_type, compilation';
+  // Songs split from one file by a cue sheet can't be moved one by one; they are left out.
+  return scopeTracksAll(scope).filter((t) => !t.cue_file);
+}
+
+function scopeTracksAll(scope) {
+  const cols = 'id, path, title, artist, album, album_id, album_artist, track_no, disc_no, year, genre, release_type, compilation, cue_file';
   const id = scope?.id;
   switch (scope?.type) {
     case 'tracks': {

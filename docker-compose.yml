@@ -1,0 +1,28 @@
+# docker compose up -d   →  http://localhost:7700
+services:
+  sonara:
+    build: .
+    image: sonara:latest
+    container_name: sonara
+    restart: unless-stopped     # also brings Sonara back after "Restart" or a restore in the UI
+    ports:
+      - "7700:7700"
+    volumes:
+      - sonara-data:/data       # database, config, covers, logs, backups, transcode cache
+      - /path/to/music:/music:ro
+      # Allow tag editing / organizing / Inbox imports by mounting read-write instead:
+      # - /path/to/music:/music
+    environment:
+      - TZ=Etc/UTC
+      # - SONARA_PUBLIC_URL=https://music.example.com
+      # - SONARA_LOG_FORMAT=json
+      # More folders: SONARA_MUSIC_DIRS=/music:/more-music (and mount them)
+    # Network speakers (DLNA) and Chromecast need to reach Sonara on your LAN, and SSDP
+    # discovery needs multicast. On Linux the simplest is host networking (remove "ports"):
+    # network_mode: host
+    # Jukebox mode: build with --build-arg WITH_MPV=1 and pass the sound device through:
+    # devices:
+    #   - /dev/snd:/dev/snd
+
+volumes:
+  sonara-data:

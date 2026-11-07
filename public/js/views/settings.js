@@ -3,12 +3,16 @@ import { api } from '../api.js';
 import { html, ic, el, plural, fmtBytes, fmtLong, prefs } from '../util.js';
 import { state } from '../state.js';
 import { toast, toastError, confirmDialog, formDialog, modal } from '../ui.js';
-import { refreshTheme } from '../theme.js';
+import { refreshTheme, THEMES } from '../theme.js';
 import { player, playback } from '../player.js';
+import { preferredCodec } from '../api.js';
 import { eqEditor } from '../eq.js';
 import { organizeDialog } from '../fileops.js';
+import { accountExtras, adminPanels, bindExtras, userAccessDialog, offlinePanel } from './settings-extra.js';
 
-export async function settingsView() {
+const QUALITIES = [[0, 'Original quality'], [320, '320 kbps'], [256, '256 kbps'], [192, '192 kbps'], [160, '160 kbps'], [128, '128 kbps'], [96, '96 kbps'], [64, '64 kbps']];
+
+export async function settingsView({ query } = {}) {
   const admin = state.user.isAdmin;
   const [stats, settings, users, scan, toolInfo] = await Promise.all([
     api.get('/stats'),
@@ -77,17 +81,44 @@ export async function settingsView() {
           <div class="list-row" style="animation:none;margin-top:6px">${ic('download')}<span class="grow mono" data-dl-dir>${settings.downloadsDir}</span>
             <button class="btn sm ghost" data-dl-change>Change…</button></div>
         </div>
+        <div style="margin-top:16px">
+          <label class="muted">Transcoding cache</label>
+          <div class="list-row" style="animation:none;margin-top:6px">${ic('waves')}<span class="grow" data-cache-info>…</span>
+            <input class="input sm" type="number" min="0" step="256" value="${settings.transcodeCacheMB}" data-cache-mb style="width:100px" aria-label="Cache size in MB"><span class="muted">MB</span>
+            <button class="btn sm ghost" data-cache-clear>Clear</button></div>
+        </div>
         <div class="tool-status">
           ${[['ffmpeg', 'ffmpeg', 'Tag editing and video → audio conversion'], ['ytdlp', 'yt-dlp', 'Downloading from YouTube and other sites']].map(([k, n, what]) => html`
             <div class="tool ${toolInfo?.[k] ? 'ok' : 'missing'}">${ic(toolInfo?.[k] ? 'check' : 'alert')}<span><b>${n}</b> ${toolInfo?.[k] ? html`<span class="muted">${toolInfo[k].version}</span>` : html`<span class="muted">not found</span>`}<br><span class="muted">${what}</span></span></div>`)}
         </div>
       </section>
 
+      <section class="panel wide" style="--i:3" data-panel="online">
+        <h3>${ic('sparkles')} Online services</h3>
+        <p>Optional extras that look things up on the internet. Everything here is off until you turn it on, and only song, album and artist names are sent.</p>
+        <label class="check"><input type="checkbox" data-online="onlineLyrics" ${settings.onlineLyrics ? 'checked' : ''}><span class="sw"></span>Find lyrics on <a href="https://lrclib.net" target="_blank" rel="noopener">LRCLIB</a> when a song has none</label>
+        <label class="check"><input type="checkbox" data-online="onlineArtistInfo" ${settings.onlineArtistInfo ? 'checked' : ''}><span class="sw"></span>Artist bios and photos (MusicBrainz, Wikipedia)</label>
+        <label class="check"><input type="checkbox" data-online="onlineCovers" ${settings.onlineCovers ? 'checked' : ''}><span class="sw"></span>Find missing album covers (Cover Art Archive)</label>
+        <div class="row-gap" style="margin:6px 0 4px 50px"><button class="btn sm ghost" data-find-covers>${ic('search')} Look for missing covers now</button><span class="muted" data-cover-status></span></div>
+        <div class="org-grid" style="margin-top:16px">
+          <label class="muted">Last.fm API key</label>
+          <input class="input sm mono" data-key="lastfmApiKey" value="${settings.lastfmApiKey}" placeholder="Needed for Last.fm scrobbling and similar artists" autocomplete="off" spellcheck="false">
+          <label class="muted">Last.fm secret</label>
+          <input class="input sm mono" type="password" data-key="lastfmSecret" placeholder="${settings.lastfmSecretSet ? '•••••••• (saved)' : 'Shared secret'}" autocomplete="new-password">
+          <label class="muted">fanart.tv key</label>
+          <input class="input sm mono" data-key="fanartApiKey" value="${settings.fanartApiKey}" placeholder="Optional: better artist photos" autocomplete="off" spellcheck="false">
+          <label class="muted">Contact</label>
+          <input class="input sm" data-key="onlineContact" value="${settings.onlineContact}" placeholder="Optional URL or email, sent to MusicBrainz so they can reach you" autocomplete="off">
+        </div>
+        <p class="muted" style="font-size:12px">Get a Last.fm key and secret at <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener">last.fm/api/account/create</a>. Leave the callback URL empty.</p>
+      </section>
+
       <section class="panel wide" style="--i:3" data-panel="users">
         <h3>${ic('users')} Users</h3><p>Everyone gets their own favorites, playlists and history.</p>
         <div class="users"></div>
         <button class="btn sm primary" data-add-user style="margin-top:8px">${ic('plus')} Add user</button>
-      </section>` : ''}
+      </section>
+      ${adminPanels(settings)}` : ''}
 
       <section class="panel" style="--i:4" data-panel="playback">
         <h3>${ic('waves')} Playback</h3><p>How songs flow into each other. Stored in this browser.</p>
@@ -114,6 +145,18 @@ export async function settingsView() {
         </div>
         <label class="check" style="margin-top:10px"><input type="checkbox" data-pb="rgClip" ${playback.preventClipping ? 'checked' : ''}><span class="sw"></span>Prevent clipping (use peak values)</label>
         <p class="muted" style="margin-top:8px;font-size:12px">Browsers can only turn volume down, so positive gains are capped at your current volume.</p>
+        <h3 style="margin-top:22px;font-size:15px">Streaming quality</h3>
+        <p>Lower it to save data. Files above this bitrate are converted on the server while they play.</p>
+        <div class="org-grid">
+          <label class="muted">On Wi-Fi / wired</label>
+          <select class="input sm" data-pb="streamBitrate">${QUALITIES.map(([k, l]) => html`<option value="${k}" ${Number(prefs.get('streamBitrate', 0)) === k ? 'selected' : ''}>${l}</option>`)}</select>
+          <label class="muted">On mobile data</label>
+          <select class="input sm" data-pb="streamBitrateCellular">${QUALITIES.map(([k, l]) => html`<option value="${k}" ${Number(prefs.get('streamBitrateCellular', prefs.get('streamBitrate', 0))) === k ? 'selected' : ''}>${l}</option>`)}</select>
+          <label class="muted">Format</label>
+          <select class="input sm" data-pb="streamCodec">${[['auto', `Automatic (${preferredCodec().toUpperCase()})`], ['opus', 'Opus'], ['aac', 'AAC'], ['mp3', 'MP3']].map(([k, l]) => html`<option value="${k}" ${prefs.get('streamCodec', 'auto') === k ? 'selected' : ''}>${l}</option>`)}</select>
+        </div>
+        ${state.user.maxBitrate ? html`<p class="muted" style="font-size:12px">Your account is limited to ${state.user.maxBitrate} kbps by an admin.</p>` : ''}
+        <p class="muted" style="font-size:12px">Mobile data is detected on browsers that report it (mainly Chrome on Android). Formats browsers can't play (WMA, APE, ALAC, DSD…) are always converted.</p>
       </section>
 
       <section class="panel wide" style="--i:5" data-panel="eq">
@@ -127,11 +170,22 @@ export async function settingsView() {
         <label class="check"><input type="checkbox" data-pref="ambient" ${prefs.get('ambient', true) ? 'checked' : ''}><span class="sw"></span>Animated ambient background</label>
         <label class="check"><input type="checkbox" data-pref="visualizer" ${prefs.get('visualizer', true) ? 'checked' : ''}><span class="sw"></span>Audio visualizer &amp; beat-reactive glow</label>
         <label class="check"><input type="checkbox" data-pref="reduceMotion" ${prefs.get('reduceMotion', false) ? 'checked' : ''}><span class="sw"></span>Reduce motion</label>
+        <label class="check"><input type="checkbox" data-pref="highContrast" ${prefs.get('highContrast', false) ? 'checked' : ''}><span class="sw"></span>High contrast</label>
+        <label class="muted" style="display:block;margin-top:14px">Colour theme <span style="font-size:12px">(used when colours don't follow the album art)</span></label>
+        <div class="theme-swatches">${Object.entries(THEMES).map(([k, t]) => html`<button class="swatch ${!prefs.get('accentCustom', '') && prefs.get('themePreset', 'aurora') === k ? 'on' : ''}" data-theme="${k}" title="${t.name}" aria-label="${t.name}"
+          style="background:linear-gradient(135deg, ${t.colors[0]}, ${t.colors[1]} 55%, ${t.colors[2]})"></button>`)}
+          <label class="swatch custom ${prefs.get('accentCustom', '') ? 'on' : ''}" title="Pick your own accent">${ic('palette')}<input type="color" data-accent value="${prefs.get('accentCustom', '') || '#8b5cf6'}" aria-label="Custom accent colour"></label></div>
       </section>
+
+      ${offlinePanel()}
 
       <section class="panel" style="--i:6">
         <h3>${ic('key')} Account</h3><p>Change your password. Other sessions will be signed out.</p>
         <button class="btn sm" data-password>${ic('key')} Change password</button>
+        <h3 style="margin-top:26px">${ic('radio')} Scrobbling</h3>
+        <p>Share what you play with Last.fm or ListenBrainz.</p>
+        <div class="services"><p class="muted">Loading…</p></div>
+        ${accountExtras()}
         <h3 style="margin-top:26px">${ic('keyboard')} Keyboard shortcuts</h3>
         <div class="kbd-list" style="margin-top:12px">
           <kbd class="k">Space</kbd><span>Play / pause</span>
@@ -144,7 +198,9 @@ export async function settingsView() {
           <kbd class="k">R</kbd><span>Repeat mode</span>
           <kbd class="k">F</kbd><span>Now playing view</span>
           <kbd class="k">Q</kbd><span>Queue</span>
+          <kbd class="k">P</kbd><span>Mini player</span>
           <kbd class="k">E</kbd><span>Equalizer</span>
+          <kbd class="k">L</kbd><span>Lyrics</span>
           <kbd class="k">/</kbd><span>Search</span>
         </div>
       </section>
@@ -159,12 +215,21 @@ export async function settingsView() {
     if (input.dataset.pref === 'visualizer' && input.checked) toast('Visualizer starts with the next song you play');
   }));
 
+  const pickTheme = (preset, custom = '') => {
+    prefs.set('themePreset', preset);
+    prefs.set('accentCustom', custom);
+    v.querySelectorAll('.swatch').forEach((b) => b.classList.toggle('on', custom ? b.classList.contains('custom') : b.dataset.theme === preset));
+    refreshTheme();
+  };
+  v.querySelectorAll('[data-theme]').forEach((b) => b.addEventListener('click', () => pickTheme(b.dataset.theme)));
+  v.querySelector('[data-accent]').addEventListener('input', (e) => pickTheme(prefs.get('themePreset', 'aurora'), e.target.value));
+
   v.querySelector('[data-eq-host]').replaceWith(eqEditor());
 
   // ── Playback
   v.querySelectorAll('[data-pb]').forEach((input) => input.addEventListener(input.type === 'range' ? 'input' : 'change', () => {
     const k = input.dataset.pb;
-    const val = input.type === 'checkbox' ? input.checked : input.tagName === 'SELECT' ? input.value : Number(input.value);
+    const val = input.type === 'checkbox' ? input.checked : input.tagName === 'SELECT' ? (/^\d+$/.test(input.value) ? Number(input.value) : input.value) : Number(input.value);
     prefs.set(k, val);
     if (k === 'crossfade') {
       v.querySelector('[data-xf-label]').textContent = val ? `${val} s` : 'Off';
@@ -186,7 +251,78 @@ export async function settingsView() {
     if (val) toast('Password updated', { type: 'success' });
   });
 
+  // ── Scrobbling (every user)
+  const servicesBox = v.querySelector('.services');
+  const renderServices = (s) => {
+    servicesBox.innerHTML = String(html`
+      <div class="service">
+        <b>Last.fm</b>
+        ${s.lastfm.connected ? html`<span class="muted">Signed in as ${s.lastfm.name}</span>
+            <label class="check sm"><input type="checkbox" data-svc-on="lastfm" ${s.lastfm.enabled ? 'checked' : ''}><span class="sw"></span>On</label>
+            <button class="btn sm ghost" data-svc-off="lastfm">Disconnect</button>`
+          : s.lastfm.available ? html`<a class="btn sm" href="/api/lastfm/connect">${ic('logout')} Connect Last.fm</a>`
+          : html`<span class="muted">${admin ? 'Add a Last.fm API key and secret under Online services first.' : 'An admin needs to set up Last.fm first.'}</span>`}
+      </div>
+      <div class="service">
+        <b>ListenBrainz</b>
+        ${s.listenbrainz.connected ? html`<span class="muted">Signed in as ${s.listenbrainz.name}</span>
+            <label class="check sm"><input type="checkbox" data-svc-on="listenbrainz" ${s.listenbrainz.enabled ? 'checked' : ''}><span class="sw"></span>On</label>
+            <button class="btn sm ghost" data-svc-off="listenbrainz">Disconnect</button>`
+          : html`<input class="input sm mono" data-lb-token placeholder="User token from listenbrainz.org/settings" autocomplete="off" spellcheck="false">
+            <button class="btn sm" data-lb-connect>Connect</button>`}
+      </div>
+      ${s.pending ? html`<p class="muted" style="font-size:12px">${plural(s.pending, 'scrobble')} waiting to be sent (will retry).</p>` : ''}`);
+  };
+  api.get('/me/services').then(renderServices).catch(() => { servicesBox.innerHTML = ''; });
+  servicesBox.addEventListener('click', async (e) => {
+    const off = e.target.closest('[data-svc-off]');
+    if (off) { try { renderServices({ ...(await api.del(`/me/services/${off.dataset.svcOff}`)), pending: 0 }); } catch (err) { toastError(err); } }
+    if (e.target.closest('[data-lb-connect]')) {
+      try {
+        const r = await api.put('/me/services/listenbrainz', { token: servicesBox.querySelector('[data-lb-token]').value });
+        toast(`Connected to ListenBrainz as ${r.name}`, { type: 'success' });
+        renderServices(await api.get('/me/services'));
+      } catch (err) { toastError(err); }
+    }
+  });
+  servicesBox.addEventListener('change', async (e) => {
+    const on = e.target.closest('[data-svc-on]');
+    if (on) { try { await api.put(`/me/services/${on.dataset.svcOn}/enabled`, { enabled: on.checked }); } catch (err) { toastError(err); } }
+  });
+  if (query?.get('connected') === 'lastfm') toast('Connected to Last.fm', { type: 'success' });
+  if (query?.get('error')) toast(query.get('error'), { type: 'error', ms: 6000 });
+
+  bindExtras(v, admin ? settings : null);
   if (!admin) return v;
+
+  // ── Online services
+  v.querySelectorAll('[data-online]').forEach((input) => input.addEventListener('change', async () => {
+    try { await api.put('/admin/settings', { [input.dataset.online]: input.checked }); toast(input.checked ? 'Turned on' : 'Turned off', { type: 'success', ms: 1200 }); } catch (err) { toastError(err); }
+  }));
+  v.querySelectorAll('[data-key]').forEach((input) => input.addEventListener('change', async () => {
+    if (input.dataset.key === 'lastfmSecret' && !input.value.trim()) return;
+    try {
+      await api.put('/admin/settings', { [input.dataset.key]: input.value });
+      if (input.type === 'password') { input.value = ''; input.placeholder = '•••••••• (saved)'; }
+      toast('Saved', { type: 'success', ms: 1200 });
+      renderServices(await api.get('/me/services'));
+    } catch (err) { toastError(err); }
+  }));
+  const coverStatus = v.querySelector('[data-cover-status]');
+  let coverPoll = null;
+  const drawCovers = (c) => {
+    coverStatus.textContent = c.running ? `Checking ${c.checked} / ${c.total}…` : c.finishedAt ? `Last check: ${plural(c.found, 'cover')} found in ${plural(c.total, 'album')}` : '';
+    if (c.running && !coverPoll) coverPoll = setInterval(async () => {
+      if (!v.isConnected) return clearInterval(coverPoll);
+      const n = await api.get('/admin/covers').catch(() => null);
+      if (n) drawCovers(n);
+      if (n && !n.running) { clearInterval(coverPoll); coverPoll = null; }
+    }, 1500);
+  };
+  api.get('/admin/covers').then(drawCovers).catch(() => {});
+  v.querySelector('[data-find-covers]').addEventListener('click', async () => {
+    try { drawCovers(await api.post('/admin/covers', { all: true })); } catch (err) { toastError(err); }
+  });
 
   // ── Folders
   let dirs = settings.musicDirs;
@@ -270,6 +406,14 @@ export async function settingsView() {
     try { await api.put('/admin/settings', { allowFileChanges: e.target.checked }); toast(e.target.checked ? 'File changes allowed' : 'File changes turned off', { type: 'success', ms: 1500 }); } catch (err) { toastError(err); }
   });
   v.querySelector('[data-organize-lib]').addEventListener('click', () => organizeDialog({ type: 'library' }));
+  const drawCache = (c) => { v.querySelector('[data-cache-info]').textContent = `${fmtBytes(c.size)} used by ${plural(c.files, 'converted file')}`; };
+  api.get('/admin/transcode').then(drawCache).catch(() => {});
+  v.querySelector('[data-cache-clear]').addEventListener('click', async () => {
+    try { drawCache(await api.del('/admin/transcode')); toast('Cache cleared', { type: 'success', ms: 1200 }); } catch (err) { toastError(err); }
+  });
+  v.querySelector('[data-cache-mb]').addEventListener('change', async (e) => {
+    try { await api.put('/admin/settings', { transcodeCacheMB: Number(e.target.value) }); toast('Saved', { type: 'success', ms: 1200 }); } catch (err) { toastError(err); }
+  });
   v.querySelector('[data-dl-change]').addEventListener('click', async () => {
     const d = await folderPicker({ title: 'Downloads folder', message: 'Where yt-dlp downloads and conversions are saved until you file them. Must be outside your music folders.', start: settings.downloadsDir });
     if (!d) return;
@@ -289,6 +433,10 @@ export async function settingsView() {
       <div class="list-row" style="animation-delay:${i * 40}ms">
         <div class="avatar">${u.username[0]}</div>
         <span class="grow"><b>${u.username}</b> <span class="muted">· ${u.isAdmin ? 'Admin' : 'Listener'} · joined ${new Date(u.createdAt).toLocaleDateString()}</span></span>
+        <select class="input sm" data-u-max="${u.id}" title="Maximum streaming bitrate" aria-label="Maximum streaming bitrate">
+          ${QUALITIES.map(([k, l]) => html`<option value="${k}" ${(u.maxBitrate || 0) === k ? 'selected' : ''}>${k ? `Max ${l}` : 'No bitrate limit'}</option>`)}
+        </select>
+        <button class="btn sm ghost" data-u-access="${u.id}" title="Permissions and library access">${u.libraryDirs?.length ? 'Limited access' : 'Access'}${u.twoFactor ? ' · 2FA' : ''}</button>
         <button class="btn sm ghost" data-u-pw="${u.id}">Reset password</button>
         ${u.id !== state.user.id ? html`
           <button class="btn sm ghost" data-u-admin="${u.id}" data-val="${u.isAdmin ? 0 : 1}">${u.isAdmin ? 'Make listener' : 'Make admin'}</button>
@@ -296,13 +444,23 @@ export async function settingsView() {
       </div>`)}`);
   };
   renderUsers(users);
+  usersBox.addEventListener('change', async (e) => {
+    const sel = e.target.closest('[data-u-max]');
+    if (!sel) return;
+    try {
+      await api.put(`/admin/users/${sel.dataset.uMax}`, { maxBitrate: Number(sel.value) });
+      if (Number(sel.dataset.uMax) === state.user.id) state.user.maxBitrate = Number(sel.value);
+      toast('Saved', { type: 'success', ms: 1200 });
+    } catch (err) { toastError(err); }
+  });
   const reloadUsers = async () => renderUsers(await api.get('/admin/users'));
   usersBox.addEventListener('click', async (e) => {
     const t = e.target.closest('button');
     if (!t) return;
-    const user = (await api.get('/admin/users')).find((u) => String(u.id) === (t.dataset.uPw || t.dataset.uAdmin || t.dataset.uDel));
+    const user = (await api.get('/admin/users')).find((u) => String(u.id) === (t.dataset.uPw || t.dataset.uAdmin || t.dataset.uDel || t.dataset.uAccess));
     if (!user) return;
     try {
+      if (t.dataset.uAccess) { if (await userAccessDialog(user, settings.musicDirs.map((d) => d.path))) reloadUsers(); return; }
       if (t.dataset.uPw) {
         const val = await formDialog({ title: `Reset password for ${user.username}`, confirm: 'Reset', fields: [{ name: 'password', label: 'New password', type: 'password' }],
           validate: (x) => (x.password.length < 6 ? 'Password must be at least 6 characters' : null) });
@@ -394,4 +552,5 @@ export function folderPicker(opts = {}) {
 export function applyPrefs() {
   document.body.classList.toggle('no-ambient', !prefs.get('ambient', true));
   document.body.classList.toggle('reduce-motion', !!prefs.get('reduceMotion', false));
+  document.body.classList.toggle('high-contrast', !!prefs.get('highContrast', false));
 }

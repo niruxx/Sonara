@@ -5,11 +5,11 @@ import { player } from './player.js';
 import { toast, toastError, formDialog } from './ui.js';
 
 export const bus = new Emitter();
-export const state = { user: null, playlists: [] };
+export const state = { user: null, playlists: [], smartPlaylists: [] };
 
 export async function refreshPlaylists() {
   try {
-    state.playlists = await api.get('/playlists');
+    [state.playlists, state.smartPlaylists] = await Promise.all([api.get('/playlists'), api.get('/smart-playlists').catch(() => [])]);
     bus.emit('playlists', state.playlists);
   } catch { /* signed out */ }
 }

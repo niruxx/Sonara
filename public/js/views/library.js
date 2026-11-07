@@ -1,6 +1,6 @@
 // Home, Albums, Artists, Songs, Genres views.
 import { api } from '../api.js';
-import { html, ic, el, greeting, plural, prefs } from '../util.js';
+import { html, ic, el, art, greeting, plural, prefs } from '../util.js';
 import { player } from '../player.js';
 import { state } from '../state.js';
 import { navigate } from '../router.js';
@@ -40,15 +40,35 @@ export async function homeView() {
       <button class="btn primary" data-shuffle-all>${ic('shuffle')} Shuffle library</button>
       <span class="muted">${plural(stats.tracks, 'song')} · ${plural(stats.albums, 'album')} · ${plural(stats.artists, 'artist')}</span>
     </div>
+    ${home.continueListening?.length ? section('Continue listening', null, html`<div class="carousel">${home.continueListening.map((a, i) => html`
+      <a class="card" href="/album/${a.id}" style="--i:${i}">
+        <div class="card-art">${art(a.cover, a.name)}
+          <button class="card-play" data-resume="${a.id}" data-at="${a.resumeIndex}" aria-label="Resume ${a.name}">${ic('play')}</button>
+          <div class="card-progress"><i style="width:${Math.round(a.progress * 100)}%"></i></div></div>
+        <div class="card-title" title="${a.name}">${a.name}</div>
+        <div class="card-sub">Song ${a.resumeIndex + 1} of ${a.trackCount} · ${a.artist}</div>
+      </a>`)}</div>`) : ''}
     ${home.recentlyPlayed.length ? section('Jump back in', null, html`<div class="recent-list"></div>`) : ''}
+    ${home.onThisDay?.length ? section(`On this day`, null, html`<p class="muted section-note">What you were listening to on ${new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })} in years past.</p><div class="otd-list"></div>`) : ''}
     ${home.recentAlbums?.length ? section('Recently played albums', '/albums?sort=lastPlayed', html`<div class="carousel">${home.recentAlbums.map(albumCard)}</div>`) : ''}
     ${section('Recently added', '/albums?sort=recent', html`<div class="carousel">${home.recentlyAdded.map(albumCard)}</div>`)}
     ${home.topArtists.length ? section('Your top artists', '/artists', html`<div class="carousel">${home.topArtists.map((a, i) => artistCard({ ...a, albumCount: null }, i))}</div>`) : ''}
     ${home.mostPlayed.length ? section('On repeat', null, html`<div class="most-list"></div>`) : ''}
+    ${home.rediscover?.length ? section('Rediscover', null, html`<p class="muted section-note">Songs you loved but haven't played in a while.</p><div class="rediscover-list"></div>`) : ''}
     ${section('Discover', '/albums?sort=random', html`<div class="carousel">${home.discover.map(albumCard)}</div>`)}
   `);
   if (home.recentlyPlayed.length) body.querySelector('.recent-list').replaceWith(trackList(home.recentlyPlayed.slice(0, 6), { head: false }).el);
   if (home.mostPlayed.length) body.querySelector('.most-list').replaceWith(trackList(home.mostPlayed, { head: false }).el);
+  if (home.onThisDay?.length) body.querySelector('.otd-list').replaceWith(trackList(home.onThisDay.slice(0, 6), { head: false }).el);
+  if (home.rediscover?.length) body.querySelector('.rediscover-list').replaceWith(trackList(home.rediscover.slice(0, 6), { head: false }).el);
+  body.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-resume]');
+    if (!b) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const a = await api.get(`/albums/${b.dataset.resume}`);
+    player.playList(a.tracks, Number(b.dataset.at));
+  }, true);
   body.querySelector('[data-shuffle-all]').addEventListener('click', async () => {
     player.playList(await api.get('/tracks/random', { limit: 300 }), 0);
   });
@@ -213,10 +233,12 @@ export async function genreView({ params }) {
     <p class="page-sub">${plural(albums.length, 'album')}</p>
     <div class="actions">
       <button class="play-fab" data-play aria-label="Play">${ic('play')}</button>
+      <button class="btn" data-radio>${ic('radio')} ${params.name} radio</button>
       ${state.user.isAdmin ? html`<button class="btn" data-organize>${ic('folder')} Organize files…</button>` : ''}
     </div>
     <div class="grid">${albums.map(albumCard)}</div></div>`);
   v.querySelector('[data-play]').addEventListener('click', async () => player.playList(await api.get('/tracks', { genre: params.name, sort: 'album', limit: 500 }), 0, { shuffle: true }));
+  v.querySelector('[data-radio]').addEventListener('click', () => player.startRadio(`genre:${params.name}`, params.name));
   v.querySelector('[data-organize]')?.addEventListener('click', () => organizeDialog({ type: 'genre', id: params.name, name: params.name }));
   return v;
 }

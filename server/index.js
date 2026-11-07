@@ -7,6 +7,11 @@ import { db } from './db.js';
 import { sessionMiddleware } from './auth.js';
 import { api } from './api.js';
 import { scanLibrary, scheduleScans, watchLibrary } from './scanner.js';
+import { publicApi } from './public.js';
+import { requestMetrics, health, metricsText } from './metrics.js';
+import { setupJukebox } from './jukebox.js';
+import { setupDlna } from './dlna.js';
+import { scheduleBackups } from './backup.js';
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const config = getConfig();
@@ -22,11 +27,33 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.use(sessionMiddleware);
+app.use(requestMetrics);
+
+// Health check for Docker, load balancers and uptime monitors (no sign-in needed).
+app.get('/api/health', (_req, res) => {
+  const h = health();
+  res.status(h.status === 'ok' ? 200 : 503).json({ ...h, version: pkg.version });
+});
 app.get('/api/version', (_req, res) => res.json({ name: 'Sonara', version: pkg.version }));
+
+app.use(sessionMiddleware);
+
+// Prometheus metrics: off unless "metrics": true. With "metricsToken" set, scrapers send it as a bearer token.
+app.get('/metrics', (req, res) => {
+  const c = getConfig();
+  if (!c.metrics) return res.status(404).end();
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const allowed = c.metricsToken ? bearer === c.metricsToken : true;
+  if (!allowed && !req.user?.is_admin) return res.status(401).set('WWW-Authenticate', 'Bearer').end();
+  res.type('text/plain; version=0.0.4').send(metricsText(pkg.version));
+});
+
+app.use('/api/public', publicApi);
 app.use('/api', api);
 
 const PUBLIC = path.join(ROOT, 'public');
+// Public share pages work without an account.
+app.get('/s/:id', (_req, res) => res.sendFile(path.join(PUBLIC, 'share.html'), { maxAge: 0 }));
 // maxAge 0 + ETag: browsers revalidate (cheap 304s), so updates show up immediately.
 app.use(express.static(PUBLIC, { index: false, maxAge: 0 }));
 // Single-page app: every other GET serves index.html.
@@ -44,6 +71,9 @@ const server = app.listen(config.port, config.host, () => {
   if (config.scanOnStartup && config.musicDirs.length) setTimeout(() => scanLibrary(), 1500);
   scheduleScans();
   watchLibrary();
+  scheduleBackups();
+  setupJukebox().catch((err) => log.warn('[jukebox]', err.message));
+  setupDlna();
 });
 
 server.on('error', (err) => {
@@ -51,11 +81,13 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-function shutdown(signal) {
-  log.info(`Received ${signal}, shutting down`);
+function shutdown(signal, code = 0) {
+  log.info(signal === 'restart' ? 'Restarting' : `Received ${signal}, shutting down`);
   server.close();
+  server.closeAllConnections?.();
   try { db.close(); } catch { /* already closed */ }
-  process.exit(0);
+  process.exit(code);
 }
+process.on('sonara:restart', () => shutdown('restart', 75));
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));

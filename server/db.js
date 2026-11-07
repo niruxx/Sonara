@@ -5,9 +5,31 @@
 // startup, which is what lets the update script pull new code safely onto an
 // existing database.
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseSync } from 'node:sqlite';
-import { DB_FILE } from './config.js';
+import { DB_FILE, DATA_DIR, BACKUPS_DIR } from './config.js';
 import { log } from './logger.js';
+
+// A restore uploaded from Settings is swapped in here, before the database is opened.
+export const RESTORE_FILE = path.join(DATA_DIR, 'restore-pending.db');
+if (fs.existsSync(RESTORE_FILE)) {
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').replace(/\..+/, '');
+      const cur = new DatabaseSync(DB_FILE);
+      cur.prepare('VACUUM INTO ?').run(path.join(BACKUPS_DIR, `sonara-${stamp}-before-restore.db`));
+      cur.close();
+    }
+    for (const ext of ['-wal', '-shm']) fs.rmSync(DB_FILE + ext, { force: true });
+    fs.renameSync(RESTORE_FILE, DB_FILE);
+    log.info('[db] Restored the database from an uploaded backup');
+  } catch (err) {
+    log.error('[db] Could not restore the uploaded backup, keeping the current database', err);
+    fs.rmSync(RESTORE_FILE, { force: true });
+  }
+}
 
 export const db = new DatabaseSync(DB_FILE);
 db.exec(`
@@ -159,6 +181,140 @@ const MIGRATIONS = [
   -- ...and make the next scan re-read every file to pick up the new tags.
   UPDATE tracks SET mtime = 0;
   `,
+
+  // 3 — transcoding (formats browsers can't play), cue sheets, per-user bitrate limits.
+  `
+  ALTER TABLE tracks ADD COLUMN needs_transcode INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tracks ADD COLUMN cue_file TEXT;
+  ALTER TABLE tracks ADD COLUMN cue_start REAL;
+  ALTER TABLE tracks ADD COLUMN cue_end REAL;
+  CREATE INDEX idx_tracks_cue ON tracks(cue_file);
+  ALTER TABLE users ADD COLUMN max_bitrate INTEGER NOT NULL DEFAULT 0;
+  UPDATE tracks SET needs_transcode = 1 WHERE codec LIKE '%ALAC%';
+  `,
+
+  // 4 — lyrics, smart playlists, online artist info, scrobbling.
+  `
+  -- Looked-up lyrics per track. text NULL = nothing found (so we don't keep looking).
+  CREATE TABLE lyrics (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    text TEXT,
+    synced INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL,
+    file_mtime INTEGER,
+    fetched_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE smart_playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    rules TEXT NOT NULL,
+    sort TEXT NOT NULL DEFAULT 'random',
+    max_tracks INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE artist_info (
+    artist_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    mbid TEXT,
+    bio TEXT,
+    bio_source TEXT,
+    url TEXT,
+    image TEXT,
+    fetched_at INTEGER NOT NULL
+  );
+
+  -- Per-user connections to Last.fm / ListenBrainz.
+  CREATE TABLE user_services (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    service TEXT NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (user_id, service)
+  );
+
+  -- Scrobbles waiting to be sent (retried when a service is down).
+  CREATE TABLE scrobble_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    service TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_scrobble_next ON scrobble_queue(next_at);
+
+  -- Albums we already asked the Cover Art Archive about.
+  CREATE TABLE cover_lookups (
+    album_id TEXT PRIMARY KEY,
+    tried_at INTEGER NOT NULL,
+    found INTEGER NOT NULL DEFAULT 0,
+    cover TEXT
+  );
+  `,
+
+  // 5 — sharing, collaborative playlists, playlist files, permissions, library access,
+  // two-factor and external sign-in, scan history.
+  `
+  -- JSON: { download, share, playlists, jukebox } (missing keys use the defaults).
+  ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}';
+  -- JSON array of folders this user may see; NULL = the whole library.
+  ALTER TABLE users ADD COLUMN library_dirs TEXT;
+  ALTER TABLE users ADD COLUMN totp_secret TEXT;
+  ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local';
+  ALTER TABLE users ADD COLUMN external_id TEXT;
+  CREATE INDEX idx_users_external ON users(auth_source, external_id);
+
+  -- private | public (everyone can listen) | collaborative (everyone can add, remove and reorder)
+  ALTER TABLE playlists ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private';
+  -- Playlists imported automatically from .m3u files in the music folders.
+  ALTER TABLE playlists ADD COLUMN source_path TEXT;
+  ALTER TABLE playlists ADD COLUMN source_mtime INTEGER;
+  ALTER TABLE playlist_tracks ADD COLUMN added_by INTEGER;
+
+  CREATE TABLE shares (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,           -- track | album | playlist
+    ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    allow_download INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER,           -- NULL = never
+    created_at INTEGER NOT NULL,
+    views INTEGER NOT NULL DEFAULT 0,
+    last_viewed_at INTEGER
+  );
+  CREATE INDEX idx_shares_user ON shares(user_id);
+
+  CREATE TABLE scan_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER NOT NULL,
+    full INTEGER NOT NULL DEFAULT 0,
+    found INTEGER NOT NULL DEFAULT 0,
+    added INTEGER NOT NULL DEFAULT 0,
+    updated INTEGER NOT NULL DEFAULT 0,
+    removed INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    playlists INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+  );
+  `,
+
+  // 6 — album covers chosen in the UI (re-applied after every scan).
+  `
+  CREATE TABLE cover_overrides (
+    album_id TEXT PRIMARY KEY,
+    cover TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 function migrate() {
@@ -190,9 +346,37 @@ export function tx(fn) {
   }
 }
 
+// ───────── Per-user library access ─────────
+// Users can be limited to some music folders. Rather than threading a filter
+// through every query, the request runs inside `libraryScope` and q() rewrites
+// reads of the tracks table (FROM/JOIN tracks [alias]) into a filtered sub-select.
+
+export const libraryScope = new AsyncLocalStorage();
+const dirCache = new Map();
+db.function('sonara_in_dirs', { deterministic: true }, (p, json) => {
+  let dirs = dirCache.get(json);
+  if (!dirs) { dirs = JSON.parse(json); dirCache.set(json, dirs); }
+  const s = String(p);
+  return dirs.some((d) => s === d || s.startsWith(d.endsWith(path.sep) ? d : d + path.sep)) ? 1 : 0;
+});
+const KEYWORDS = new Set(['WHERE', 'GROUP', 'ORDER', 'LIMIT', 'JOIN', 'LEFT', 'INNER', 'CROSS', 'ON', 'USING', 'HAVING', 'UNION', 'SET', 'WINDOW', 'AS', 'NATURAL', 'EXCEPT', 'INTERSECT']);
+export function scopeSql(sql, dirs) {
+  if (/^\s*(DELETE|UPDATE|INSERT\s+(OR\s+\w+\s+)?INTO\s+tracks\b)/i.test(sql)) return sql;
+  const lit = `'${JSON.stringify(dirs).replace(/'/g, "''")}'`;
+  return sql.replace(/\b(FROM|JOIN)\s+tracks\b(\s+(?:AS\s+)?([A-Za-z_]\w*))?/gi, (m, kw, aliasPart, alias) => {
+    let a = 'tracks';
+    let rest = '';
+    if (alias && !KEYWORDS.has(alias.toUpperCase())) a = alias;
+    else if (aliasPart) rest = aliasPart;
+    return `${kw} (SELECT * FROM tracks WHERE sonara_in_dirs(path, ${lit})) AS ${a}${rest}`;
+  });
+}
+
 // Cache prepared statements by SQL text.
 const cache = new Map();
 export function q(sql) {
+  const dirs = libraryScope.getStore()?.dirs;
+  if (dirs) sql = scopeSql(sql, dirs);
   let stmt = cache.get(sql);
   if (!stmt) {
     stmt = db.prepare(sql);
