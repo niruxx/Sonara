@@ -235,7 +235,7 @@ class Player extends Emitter {
     this.emit('state', this.playing, false);
     this.emit('time', this.time, this.duration);
     this.emit('queue');
-    if (!quiet) toast(`Stopped controlling ${name}`);
+    if (!quiet) toast(t('Stopped controlling {name}', { name }));
   }
 
   /** New state from the device we're controlling. */
@@ -308,7 +308,7 @@ class Player extends Emitter {
 
   #remoteOnly(what) {
     if (!this.remote) return false;
-    toast(`${what} isn't available while controlling ${this.remote.name}`);
+    toast(t("{what} isn't available while controlling {name}", { what: t(what), name: this.remote.name }));
     return true;
   }
 
@@ -834,7 +834,7 @@ class Player extends Emitter {
   async startRadio(seed, label) {
     try {
       const list = await api.get('/radio', { seed, limit: 40 });
-      if (!list.length) return toast('Not enough music to start a radio station yet', { type: 'error' });
+      if (!list.length) return toast(t('Not enough music to start a radio station yet'), { type: 'error' });
       // A song or album radio starts with the seed itself.
       let first = [];
       if (seed.startsWith('track:') || seed.startsWith('sound:')) {
@@ -843,7 +843,7 @@ class Player extends Emitter {
       }
       this.shuffle = false;
       this.playList([...first, ...list], 0, { radio: { seed, label } });
-      toast(`${label} radio`, { type: 'success' });
+      toast(t('{name} radio', { name: label }), { type: 'success' });
     } catch (err) { toast(err.message, { type: 'error' }); }
   }
 
@@ -1112,7 +1112,7 @@ class Player extends Emitter {
     if (!queue.length) return;
     const index = cur ? map[s.index] : Math.min(map.slice(0, s.index).filter((x) => x != null).length, queue.length - 1);
     this.#applyState({ ...s, index, time: cur ? s.time : 0, original: (s.original || []).map((i) => map[i]).filter((i) => i != null) }, queue);
-    if (devId !== deviceId && devName) toast(`Picked up where you left off on ${devName}`);
+    if (devId !== deviceId && devName) toast(t('Picked up where you left off on {name}', { name: devName }));
   }
 }
 

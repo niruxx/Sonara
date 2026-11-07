@@ -207,7 +207,7 @@ export function refreshPodcast(id, { force = false } = {}) {
   return job;
 }
 
-async function addPodcast(input, user) {
+export async function addPodcast(input, user) {
   const url = cleanUrl(input).href;
   let p = q('SELECT * FROM podcasts WHERE feed_url = ?').get(url);
   if (!p) {
@@ -232,7 +232,7 @@ async function addPodcast(input, user) {
 }
 
 /** Feeds nobody follows any more are removed, downloads included. */
-function removeIfOrphan(id) {
+export function removeIfOrphan(id) {
   if (q('SELECT 1 FROM podcast_subscriptions WHERE podcast_id = ? LIMIT 1').get(id)) return;
   q('DELETE FROM podcasts WHERE id = ?').run(id);
   fs.rmSync(path.join(PODCASTS_DIR, String(id)), { recursive: true, force: true });

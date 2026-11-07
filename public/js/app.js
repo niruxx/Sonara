@@ -27,7 +27,7 @@ import { toggleMiniPlayer, miniSupported } from './mini.js';
 import { podcastsView, podcastView, episodeMenu } from './views/podcasts.js';
 import { radioView, stationMenu } from './views/radio.js';
 import { isLibrary, isEpisode, isStation, subtitle, sourceLabel } from './media.js';
-import { t, loadLocale } from './i18n.js';
+import { t, plural, loadLocale } from './i18n.js';
 import { announce } from './a11y.js';
 import { getAnalysis, forgetAnalysis, drawWave } from './analysis.js';
 import { addBookmark, markMenuItems, markTicks } from './marks.js';
@@ -282,7 +282,7 @@ async function render(url, { scroll = 0 } = {}) {
   const m = match(url.pathname);
   let view;
   try {
-    if (!m) throw Object.assign(new Error('Page not found'), { status: 404 });
+    if (!m) throw Object.assign(new Error(t('Page not found')), { status: 404 });
     [view] = await Promise.all([m.view({ params: m.params, query: url.searchParams }), old && url.pathname !== '/search' ? wait(150) : null]);
   } catch (err) {
     view = el(html`<div>${err.status === 404
@@ -584,18 +584,18 @@ const KIND_ICON = { browser: 'laptop', jukebox: 'speaker', dlna: 'speaker', cast
 
 function deviceLine(d) {
   const s = d.state;
-  if (!s?.track) return d.kind === 'browser' ? 'Idle' : d.kind === 'jukebox' ? 'Server speakers' : 'Network speaker';
-  return `${s.playing ? 'Playing' : 'Paused'}: ${s.track.title} · ${s.track.artist}`;
+  if (!s?.track) return t(d.kind === 'browser' ? 'Idle' : d.kind === 'jukebox' ? 'Server speakers' : 'Network speaker');
+  return `${s.playing ? t('Playing') : t('Paused')}: ${s.track.title} · ${s.track.artist}`;
 }
 
 function openDevices(anchor) {
   const remote = player.remote;
   const devs = connect.devices;
   const localPlaying = !remote && player.local.current;
-  const items = [{ head: remote ? `Controlling ${remote.name}` : 'Play on' }];
+  const items = [{ head: remote ? t('Controlling {name}', { name: remote.name }) : t('Play on') }];
   items.push({
     icon: remote ? 'laptop' : 'check',
-    label: `This browser${remote ? ' (play here)' : ''}`,
+    label: remote ? t('This browser (play here)') : t('This browser'),
     action: () => remote && playHere(),
   });
   for (const d of devs) {
@@ -611,22 +611,22 @@ function openDevices(anchor) {
       },
     });
   }
-  if (!devs.length) items.push({ icon: 'info', label: html`No other devices<small class="menu-sub">Open Sonara on your phone or another computer</small>` });
-  if (castSupported()) items.push('sep', { icon: 'cast', label: 'Cast to Chromecast…', action: () => startCast() });
+  if (!devs.length) items.push({ icon: 'info', label: html`${t('No other devices')}<small class="menu-sub">${t('Open Sonara on your phone or another computer')}</small>` });
+  if (castSupported()) items.push('sep', { icon: 'cast', label: t('Cast to Chromecast…'), action: () => startCast() });
   items.push('sep');
   const p = connect.party;
   if (p) {
     if (p.hostClient === clientId) {
-      items.push({ icon: 'link', label: 'Copy party link', action: () => copyText(partyUrl(p)) });
-      items.push({ icon: 'x', label: 'End listening party', danger: true, action: () => leaveParty({ end: true }) });
-    } else items.push({ icon: 'x', label: `Leave ${p.host}'s party`, action: () => leaveParty() });
+      items.push({ icon: 'link', label: t('Copy party link'), action: () => copyText(partyUrl(p)) });
+      items.push({ icon: 'x', label: t('End listening party'), danger: true, action: () => leaveParty({ end: true }) });
+    } else items.push({ icon: 'x', label: t("Leave {name}'s party", { name: p.host }), action: () => leaveParty() });
   } else if (!remote) {
-    items.push({ icon: 'party', label: html`Start a listening party<small class="menu-sub">Friends with an account listen along in sync</small>`, action: async () => {
+    items.push({ icon: 'party', label: html`${t('Start a listening party')}<small class="menu-sub">${t('Friends with an account listen along in sync')}</small>`, action: async () => {
       const party = await startParty();
       if (party) copyText(partyUrl(party));
     } });
   }
-  if (remote) items.push({ icon: 'x', label: `Stop controlling ${remote.name}`, action: () => player.leaveRemote() });
+  if (remote) items.push({ icon: 'x', label: t('Stop controlling {name}', { name: remote.name }), action: () => player.leaveRemote() });
   openMenu(anchor, items);
 }
 
@@ -637,16 +637,16 @@ function bindDevices() {
   const drawBtn = () => {
     btn.classList.toggle('on', !!player.remote);
     btn.classList.toggle('has-devices', connect.devices.length > 0);
-    btn.title = player.remote ? `Playing on ${player.remote.name}` : connect.devices.length ? `${connect.devices.length} other device${connect.devices.length === 1 ? '' : 's'} available` : 'Play on another device';
+    btn.title = player.remote ? t('Playing on {name}', { name: player.remote.name }) : connect.devices.length ? t('{devices} available', { devices: plural(connect.devices.length, 'other device') }) : t('Play on another device');
   };
   connect.on('devices', drawBtn);
   const banner = $('.pb-remote', bar);
   player.on('remote', (r) => {
     banner.hidden = !r;
-    if (r) $('[data-remote-label]', banner).textContent = `Playing on ${r.name}`;
+    if (r) $('[data-remote-label]', banner).textContent = t('Playing on {name}', { name: r.name });
     drawBtn();
     if (!r && !player.current) {
-      $('.pb-meta', bar).innerHTML = String(html`<div class="pb-title">Nothing playing</div><div class="pb-artist">Pick something you love</div>`);
+      $('.pb-meta', bar).innerHTML = String(html`<div class="pb-title">${t('Nothing playing')}</div><div class="pb-artist">${t('Pick something you love')}</div>`);
     }
   });
   $('[data-play-here]', banner).addEventListener('click', () => playHere());
@@ -665,10 +665,10 @@ function bindDevices() {
     const host = p.hostClient === clientId;
     const n = p.members?.length || 0;
     $('[data-party-label]', pbar).textContent = host
-      ? `Your listening party · ${n ? `${n} listening along` : 'share the link to invite people'}`
-      : `Listening along with ${p.host}${n > 1 ? ` and ${n - 1} other${n > 2 ? 's' : ''}` : ''}`;
+      ? `${t('Your listening party')} · ${n ? t('{n} listening along', { n }) : t('share the link to invite people')}`
+      : n > 1 ? t('Listening along with {name} and {others}', { name: p.host, others: plural(n - 1, 'other', 'others') }) : t('Listening along with {name}', { name: p.host });
     $('[data-party-copy]', pbar).hidden = !host;
-    $('[data-party-leave]', pbar).textContent = host ? 'End' : 'Leave';
+    $('[data-party-leave]', pbar).textContent = host ? t('End') : t('Leave');
   });
   $('[data-party-requests]', pbar).addEventListener('click', () => requestsDialog());
   $('[data-party-copy]', pbar).addEventListener('click', () => connect.party && copyText(partyUrl(connect.party)));

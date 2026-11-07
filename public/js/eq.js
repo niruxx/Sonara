@@ -12,18 +12,18 @@ const fmtDb = (v) => `${v > 0 ? '+' : ''}${Number(v).toFixed(v % 1 ? 1 : 0)}`;
 export function eqEditor() {
   const box = el(html`<div class="eq ${eq.enabled ? '' : 'off'}">
     <div class="eq-top">
-      <label class="check"><input type="checkbox" data-eq-on ${eq.enabled ? 'checked' : ''}><span class="sw"></span>Equalizer</label>
-      <select class="input sm" data-eq-preset aria-label="Preset">
-        ${Object.entries(EQ_PRESETS).map(([k, p]) => html`<option value="${k}" ${eq.preset === k ? 'selected' : ''}>${p.name}</option>`)}
-        <option value="custom" ${eq.preset === 'custom' ? 'selected' : ''}>Custom</option>
+      <label class="check"><input type="checkbox" data-eq-on ${eq.enabled ? 'checked' : ''}><span class="sw"></span>${t('Equalizer')}</label>
+      <select class="input sm" data-eq-preset aria-label="${t('Preset')}">
+        ${Object.entries(EQ_PRESETS).map(([k, p]) => html`<option value="${k}" ${eq.preset === k ? 'selected' : ''}>${t(p.name)}</option>`)}
+        <option value="custom" ${eq.preset === 'custom' ? 'selected' : ''}>${t('Custom')}</option>
       </select>
     </div>
     <canvas class="eq-curve" aria-hidden="true"></canvas>
     <div class="eq-bands">
       <div class="eq-band preamp">
         <span class="eq-val" data-pre-val>${fmtDb(eq.preamp)}</span>
-        <input class="eq-slider" type="range" min="-12" max="12" step="0.5" value="${eq.preamp}" data-pre aria-label="Pre-amp">
-        <span class="eq-hz">Pre</span>
+        <input class="eq-slider" type="range" min="-12" max="12" step="0.5" value="${eq.preamp}" data-pre aria-label="${t('Pre-amp')}">
+        <span class="eq-hz">${t('Pre')}</span>
       </div>
       ${EQ_BANDS.map((f, i) => html`<div class="eq-band">
         <span class="eq-val" data-val="${i}">${fmtDb(eq.gains[i])}</span>
@@ -32,8 +32,8 @@ export function eqEditor() {
       </div>`)}
     </div>
     <div class="eq-foot">
-      <label class="check"><input type="checkbox" data-headroom ${eq.autoHeadroom ? 'checked' : ''}><span class="sw"></span>Prevent clipping when boosting</label>
-      <button class="btn sm ghost" data-reset>${ic('refresh')} Reset</button>
+      <label class="check"><input type="checkbox" data-headroom ${eq.autoHeadroom ? 'checked' : ''}><span class="sw"></span>${t('Prevent clipping when boosting')}</label>
+      <button class="btn sm ghost" data-reset>${ic('refresh')} ${t('Reset')}</button>
     </div>
   </div>`);
 

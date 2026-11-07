@@ -49,9 +49,9 @@ export function attachLyrics(np) {
     activeIdx = -1;
     if (!data) { pane.innerHTML = '<div class="lyr-empty"><div class="lyr-spinner"></div></div>'; return; }
     if (!data.found) {
-      pane.innerHTML = String(html`<div class="lyr-empty">${ic('mic')}<p>No lyrics for this song</p>
-        <span class="muted">${data.online ? 'Nothing found online either.' : 'Add a .lrc file next to the song, or turn on online lyrics in Settings.'}</span>
-        ${state.user?.isAdmin ? html`<button class="btn sm" data-edit-lyrics>${ic('edit')} Add lyrics</button>` : ''}</div>`);
+      pane.innerHTML = String(html`<div class="lyr-empty">${ic('mic')}<p>${tr('No lyrics for this song')}</p>
+        <span class="muted">${data.online ? tr('Nothing found online either.') : tr('Add a .lrc file next to the song, or turn on online lyrics in Settings.')}</span>
+        ${state.user?.isAdmin ? html`<button class="btn sm" data-edit-lyrics>${ic('edit')} ${tr('Add lyrics')}</button>` : ''}</div>`);
       return;
     }
     const parsed = parseLrc(data.text);
@@ -62,8 +62,8 @@ export function attachLyrics(np) {
           ? parsed.synced.map((l, i) => html`<p class="lyr-line" data-i="${i}" data-t="${l.t}">${l.text || '♪'}</p>`)
           : parsed.plain.map((l) => html`<p class="lyr-line">${l || '\u00a0'}</p>`)}
       </div>
-      <div class="lyr-foot muted">${SOURCE_LABEL[data.source] || ''}
-        ${state.user?.isAdmin ? html` · <button class="link" data-edit-lyrics>Edit</button>${data.source === 'lrclib' || data.online ? html` · <button class="link" data-refresh-lyrics>Search again</button>` : ''}` : ''}
+      <div class="lyr-foot muted">${SOURCE_LABEL[data.source] ? tr(SOURCE_LABEL[data.source]) : ''}
+        ${state.user?.isAdmin ? html` · <button class="link" data-edit-lyrics>${tr('Edit')}</button>${data.source === 'lrclib' || data.online ? html` · <button class="link" data-refresh-lyrics>${tr('Search again')}</button>` : ''}` : ''}
       </div>`);
     pane.scrollTop = 0;
     sync(true);
@@ -154,10 +154,10 @@ export function attachLyrics(np) {
 
 function editLyrics(track, text) {
   return modal(html`
-    <h3>${ic('mic')} Lyrics for “${track.title}”</h3>
-    <p>Paste plain lyrics, or synced lyrics in LRC format (<span class="mono">[01:23.45] A line</span>). Saved in Sonara; your files aren't changed.</p>
-    <div class="field"><textarea name="lyrics" class="lyr-edit" placeholder=" ">${text}</textarea><label>Lyrics</label></div>
-    <div class="modal-actions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-ok>${ic('check')} Save</button></div>`, (box, close) => {
+    <h3>${ic('mic')} ${tr('Lyrics for “{title}”', { title: track.title })}</h3>
+    <p>${tr('Paste plain lyrics, or synced lyrics in LRC format')} (<span class="mono">[01:23.45] A line</span>). ${tr("Saved in Sonara; your files aren't changed.")}</p>
+    <div class="field"><textarea name="lyrics" class="lyr-edit" placeholder=" ">${text}</textarea><label>${tr('Lyrics')}</label></div>
+    <div class="modal-actions"><button class="btn ghost" data-close>${tr('Cancel')}</button><button class="btn primary" data-ok>${ic('check')} ${tr('Save')}</button></div>`, (box, close) => {
     box.classList.add('wide');
     box.querySelector('[data-ok]').addEventListener('click', () => close(box.querySelector('textarea').value));
   });

@@ -89,8 +89,10 @@ async function* walk(dir) {
 
 /** Covers picked in the UI win over embedded / folder art. */
 export function applyCoverOverrides() {
-  q(`UPDATE tracks SET cover = (SELECT o.cover FROM cover_overrides o WHERE o.album_id = tracks.album_id)
-    WHERE album_id IN (SELECT album_id FROM cover_overrides)`).run();
+  // Only rows whose cover differs are touched, so updated_at (client sync) stays meaningful.
+  q(`UPDATE tracks SET cover = (SELECT o.cover FROM cover_overrides o WHERE o.album_id = tracks.album_id), updated_at = ?
+    WHERE album_id IN (SELECT album_id FROM cover_overrides)
+      AND cover IS NOT (SELECT o.cover FROM cover_overrides o WHERE o.album_id = tracks.album_id)`).run(Date.now());
 }
 
 export function saveCover(data, format) {
@@ -324,9 +326,10 @@ function cueRows(base, sheet, cueStat) {
 function upsert(rows) {
   // Albums without art in the files keep a cover found online (cover_lookups).
   const ONLINE_COVER = '(SELECT cover FROM cover_lookups WHERE album_id = $album_id AND found = 1)';
-  const insert = q(`INSERT INTO tracks (${COLS.join(', ')}, added_at)
-    VALUES (${COLS.map((c) => (c === 'cover' ? `COALESCE($cover, ${ONLINE_COVER})` : '$' + c)).join(', ')}, $added_at)
-    ON CONFLICT(path) DO UPDATE SET ${COLS.filter((c) => c !== 'path').map((c) => `${c} = excluded.${c}`).join(', ')}
+  const insert = q(`INSERT INTO tracks (${COLS.join(', ')}, added_at, updated_at)
+    VALUES (${COLS.map((c) => (c === 'cover' ? `COALESCE($cover, ${ONLINE_COVER})` : '$' + c)).join(', ')}, $added_at, $added_at)
+    ON CONFLICT(path) DO UPDATE SET ${COLS.filter((c) => c !== 'path').map((c) => `${c} = excluded.${c}`).join(', ')},
+      updated_at = excluded.updated_at
     RETURNING id`);
   const clearArtists = q('DELETE FROM track_artists WHERE track_id = ?');
   const addArtist = q('INSERT OR IGNORE INTO track_artists (track_id, artist_id, name, role, position) VALUES (?, ?, ?, ?, ?)');
@@ -387,6 +390,18 @@ export async function scanLibrary({ full = false } = {}) {
       }
     }
 
+    // Files no longer where they were. If one turns up somewhere else with the same size and
+    // modification time (moved or renamed outside Sonara), the song keeps its id, so favorites,
+    // playlists, history and client apps' offline copies follow it.
+    const missing = new Map(); // `${size}:${mtime}` -> row, or null when more than one file matches
+    const cueIds = new Set(q('SELECT id FROM tracks WHERE cue_file IS NOT NULL').all().map((r) => r.id));
+    for (const [p, row] of known) {
+      if (seen.has(p) || cueIds.has(row.id) || !reachable.some((r) => p.startsWith(r + path.sep)) || fs.existsSync(p)) continue;
+      const k = `${row.size}:${row.mtime}`;
+      missing.set(k, missing.has(k) ? null : row);
+    }
+    const moveRow = q('UPDATE tracks SET path = ?, updated_at = ? WHERE id = ?');
+
     // Cue sheets: a single audio file described by a .cue becomes one track per cue entry.
     const cueFor = new Map(); // audio path -> { cue, sheet }
     for (const cue of cues) {
@@ -426,7 +441,17 @@ export async function scanLibrary({ full = false } = {}) {
             batch.push(...rows);
             prev ? state.updated++ : state.added += rows.length;
           } else {
-            const prev = known.get(file);
+            let prev = known.get(file);
+            const key = `${stat.size}:${Math.floor(stat.mtimeMs)}`;
+            const was = !prev && missing.get(key);
+            if (was) {
+              moveRow.run(file, Date.now(), was.id);
+              missing.delete(key);
+              known.delete(was.path);
+              prev = { ...was, path: file };
+              known.set(file, prev);
+              log.info(`[scan] Moved: ${was.path} → ${file}`);
+            }
             if (!full && prev && prev.mtime === Math.floor(stat.mtimeMs) && prev.size === stat.size) {
               state.processed++;
               continue;

@@ -162,9 +162,9 @@ function yearFilter(v, path, query) {
 }
 
 const yearInputs = (query, years) => html`<div class="year-filter">
-  ${ic('clock')}<input class="input sm" type="number" placeholder="${years?.min || 'From'}" value="${query.get('yearFrom') || ''}" min="0" max="9999" aria-label="From year">
-  <span class="muted">–</span><input class="input sm" type="number" placeholder="${years?.max || 'To'}" value="${query.get('yearTo') || ''}" min="0" max="9999" aria-label="To year">
-  ${query.get('yearFrom') || query.get('yearTo') ? html`<button class="icon-btn sm" data-clear-years aria-label="Clear years">${ic('x')}</button>` : ''}
+  ${ic('clock')}<input class="input sm" type="number" placeholder="${years?.min || t('From')}" value="${query.get('yearFrom') || ''}" min="0" max="9999" aria-label="${t('From year')}">
+  <span class="muted">–</span><input class="input sm" type="number" placeholder="${years?.max || t('To')}" value="${query.get('yearTo') || ''}" min="0" max="9999" aria-label="${t('To year')}">
+  ${query.get('yearFrom') || query.get('yearTo') ? html`<button class="icon-btn sm" data-clear-years aria-label="${t('Clear years')}">${ic('x')}</button>` : ''}
 </div>`;
 
 export async function albumsView({ query }) {
@@ -191,7 +191,7 @@ export async function albumsView({ query }) {
     const rows = await api.get('/albums', { sort, type, yearFrom: query.get('yearFrom'), yearTo: query.get('yearTo'), limit: 60, offset });
     if (!offset && !rows.length) {
       grid.replaceWith(el(filtered
-        ? emptyState('disc', 'No albums match', sort === 'played' || sort === 'lastPlayed' ? 'Play some music and it will show up here.' : sort === 'rating' ? 'Rate songs from their ⋯ menu to see your top albums.' : 'Try a different filter.')
+        ? emptyState('disc', t('No albums match'), t(sort === 'played' || sort === 'lastPlayed' ? 'Play some music and it will show up here.' : sort === 'rating' ? 'Rate songs from their ⋯ menu to see your top albums.' : 'Try a different filter.'))
         : noLibrary()));
     }
     grid.insertAdjacentHTML('beforeend', rows.map((a, i) => albumCard(a, i)).join(''));
@@ -241,13 +241,13 @@ export async function songsView({ query }) {
       <button class="play-fab" data-play>${ic('play')}</button>
       <button class="btn" data-shuffle>${ic('shuffle')} Shuffle${count.n !== stats.tracks ? '' : ' all'}</button>
     </div>
-    <div class="toolbar"><div class="chips">${TRACK_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="${withQuery('/songs', query, { sort: k })}">${l}</a>`)}</div></div>
+    <div class="toolbar"><div class="chips">${TRACK_SORTS.map(([k, l]) => html`<a class="chip ${k === sort ? 'active' : ''}" href="${withQuery('/songs', query, { sort: k })}">${t(l)}</a>`)}</div></div>
     <div class="toolbar">
       <div class="chips">
         <a class="chip ${query.get('favorites') ? 'active' : ''}" href="${withQuery('/songs', query, { favorites: query.get('favorites') ? null : '1' })}">${ic('heart')} Favorites</a>
         ${[3, 4, 5].map((n) => html`<a class="chip ${minRating === n ? 'active' : ''}" href="${withQuery('/songs', query, { minRating: minRating === n ? null : n })}">${'★'.repeat(n)}${n < 5 ? '+' : ''}</a>`)}
       </div>
-      ${genres.length ? html`<select class="input sm" data-genre aria-label="Genre"><option value="">All genres</option>
+      ${genres.length ? html`<select class="input sm" data-genre aria-label="${t('Genre')}"><option value="">${t('All genres')}</option>
         ${genres.map((g) => html`<option value="${g.name}" ${g.name === query.get('genre') ? 'selected' : ''}>${g.name}</option>`)}</select>` : ''}
       ${yearInputs(query)}
     </div>
@@ -256,7 +256,7 @@ export async function songsView({ query }) {
   yearFilter(v, '/songs', query);
   v.querySelector('[data-genre]')?.addEventListener('change', (e) => navigate(withQuery('/songs', query, { genre: e.target.value }), { replace: true }));
   if (!stats.tracks) { v.querySelector('.list').replaceWith(el(noLibrary())); return v; }
-  if (!count.n) { v.querySelector('.list').replaceWith(el(emptyState('music', 'No songs match', 'Try removing a filter.'))); return v; }
+  if (!count.n) { v.querySelector('.list').replaceWith(el(emptyState('music', t('No songs match'), t('Try removing a filter.')))); return v; }
   const tl = trackList([]);
   v.querySelector('.list').replaceWith(tl.el);
   let offset = 0;
@@ -284,7 +284,7 @@ export async function genresView() {
   const genres = await api.get('/genres');
   return el(html`<div><h1 class="page-title">${t('Genres')}</h1><p class="page-sub">${plural(genres.length, 'genre')}</p>
     ${genres.length ? html`<div class="grid">${genres.map(genreTile)}</div>`
-      : emptyState('tag', 'No genres yet', 'Genres come from your files’ tags. Tag your music and rescan to see them here.')}
+      : emptyState('tag', t('No genres yet'), t('Genres come from your files’ tags. Tag your music and rescan to see them here.'))}
   </div>`);
 }
 
@@ -293,7 +293,7 @@ export async function genreView({ params }) {
   const v = el(html`<div><div class="eyebrow" style="margin-top:12px">${t('Genre')}</div><h1 class="page-title">${params.name}</h1>
     <p class="page-sub">${plural(albums.length, 'album')}</p>
     <div class="actions">
-      <button class="play-fab" data-play aria-label="Play">${ic('play')}</button>
+      <button class="play-fab" data-play aria-label="${t('Play')}">${ic('play')}</button>
       <button class="btn" data-radio>${ic('radio')} ${params.name} radio</button>
       ${state.user.isAdmin ? html`<button class="btn" data-organize>${ic('folder')} Organize files…</button>` : ''}
     </div>

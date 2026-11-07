@@ -455,6 +455,47 @@ const MIGRATIONS = [
     last_at INTEGER
   );
   `,
+
+  // 9 — client apps (Subsonic / OpenSubsonic): app passwords, starred albums and artists,
+  // and change tracking for offline sync.
+  `
+  -- Per-app passwords. Stored as given (like session tokens) because Subsonic's
+  -- token sign-in, md5(password + salt), needs the server to know the password.
+  CREATE TABLE app_passwords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    secret TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    last_client TEXT
+  );
+  CREATE INDEX idx_app_passwords_user ON app_passwords(user_id);
+
+  -- Stars on albums and artists (song stars are the favorites table).
+  CREATE TABLE starred_items (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,           -- album | artist
+    item_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, kind, item_id)
+  );
+
+  -- When a song's row last changed (new file, re-read tags, moved), for "what changed since".
+  ALTER TABLE tracks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+  UPDATE tracks SET updated_at = added_at;
+  CREATE INDEX idx_tracks_updated ON tracks(updated_at);
+
+  -- Songs removed from the library, so syncing clients can drop them too.
+  CREATE TABLE track_tombstones (
+    track_id INTEGER PRIMARY KEY,
+    removed_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_track_tombstones_at ON track_tombstones(removed_at);
+  CREATE TRIGGER trg_track_removed AFTER DELETE ON tracks BEGIN
+    INSERT OR REPLACE INTO track_tombstones (track_id, removed_at) VALUES (old.id, CAST(unixepoch('subsec') * 1000 AS INTEGER));
+  END;
+  `,
 ];
 
 function migrate() {

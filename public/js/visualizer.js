@@ -4,6 +4,7 @@
 //    radial spectrum, or Milkdrop presets (butterchurn, loaded on request)
 import { player } from './player.js';
 import { prefs } from './util.js';
+import { t } from './i18n.js';
 
 const root = document.documentElement;
 let freq = null;
@@ -130,14 +131,14 @@ function loadScript(src) {
     s.src = src;
     s.crossOrigin = 'anonymous';
     s.onload = resolve;
-    s.onerror = () => reject(new Error('Could not load the Milkdrop visualizer'));
+    s.onerror = () => reject(new Error(t('Could not load the Milkdrop visualizer')));
     document.head.append(s);
   });
 }
 
 /** Start Milkdrop on a WebGL canvas laid over the spectrum canvas. */
 export async function startMilkdrop(host) {
-  if (!player.analyser) throw new Error('Play something first');
+  if (!player.analyser) throw new Error(t('Play something first'));
   if (!window.butterchurn) {
     await loadScript(`${CDN}butterchurn@2.6.7/lib/butterchurn.min.js`);
     await loadScript(`${CDN}butterchurn-presets@2.4.7/lib/butterchurnPresets.min.js`);

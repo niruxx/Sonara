@@ -5,7 +5,9 @@ import { ROOT, DATA_DIR, getConfig } from './config.js';
 import { log } from './logger.js';
 import { db } from './db.js';
 import { sessionMiddleware } from './auth.js';
-import { api } from './api.js';
+import { api, TOMBSTONE_DAYS } from './api.js';
+import { subsonicApi } from './subsonic.js';
+import { openapiSpec } from './openapi.js';
 import { scanLibrary, scheduleScans, watchLibrary } from './scanner.js';
 import { publicApi } from './public.js';
 import { requestMetrics, health, metricsText } from './metrics.js';
@@ -40,6 +42,12 @@ app.get('/api/health', (_req, res) => {
   res.status(h.status === 'ok' ? 200 : 503).json({ ...h, version: pkg.version });
 });
 app.get('/api/version', (_req, res) => res.json({ name: 'Sonara', version: pkg.version }));
+
+// Client apps (Subsonic / OpenSubsonic API). They sign in with every request, so this sits
+// before the cookie session: a browser's own session never leaks into these calls.
+app.use('/rest', subsonicApi);
+// Machine-readable description of Sonara's own API.
+app.get('/api/openapi.json', (req, res) => res.json(openapiSpec(req)));
 
 app.use(sessionMiddleware);
 
@@ -84,6 +92,10 @@ const server = app.listen(config.port, config.host, () => {
   setupIntegrations();
   setupJukebox().catch((err) => log.warn('[jukebox]', err.message));
   setupDlna();
+  // Forget removed songs once syncing apps have had plenty of time to notice.
+  const pruneTombstones = () => db.prepare('DELETE FROM track_tombstones WHERE removed_at < ?').run(Date.now() - TOMBSTONE_DAYS * 86400000);
+  pruneTombstones();
+  setInterval(pruneTombstones, 24 * 3600000).unref();
 });
 
 server.on('error', (err) => {

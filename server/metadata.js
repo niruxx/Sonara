@@ -153,7 +153,7 @@ export async function findMissingCovers({ all = false } = {}) {
         continue;
       }
       if (cover) {
-        q('UPDATE tracks SET cover = ? WHERE album_id = ? AND cover IS NULL').run(cover, a.id);
+        q('UPDATE tracks SET cover = ?, updated_at = ? WHERE album_id = ? AND cover IS NULL').run(cover, Date.now(), a.id);
         coverJob.found++;
       }
       q(`INSERT INTO cover_lookups (album_id, tried_at, found, cover) VALUES (?, ?, ?, ?)

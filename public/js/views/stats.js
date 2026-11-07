@@ -3,15 +3,18 @@ import { api } from '../api.js';
 import { html, ic, el, art, plural } from '../util.js';
 import { player } from '../player.js';
 import { trackList, emptyState } from '../components.js';
+import { t, locale } from '../i18n.js';
 
 const PERIODS = [['week', 'Last 7 days'], ['month', 'Last 30 days'], ['year', 'Last 12 months'], ['all', 'All time']];
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Short day and month names in the current language (2000-01-02 was a Sunday); filled on first render,
+// after the language has loaded.
+let WEEKDAYS = [];
+let MONTHS = [];
 
 const fmtMinutes = (min) => {
-  if (min < 60) return `${min} min`;
+  if (min < 60) return t('{n} min', { n: min });
   const h = Math.floor(min / 60);
-  return h >= 100 ? `${h.toLocaleString()} hr` : `${h} hr ${min % 60} min`;
+  return h >= 100 ? t('{n} hr', { n: h }) : t('{h} hr {m} min', { h, m: min % 60 });
 };
 
 /**
@@ -19,7 +22,7 @@ const fmtMinutes = (min) => {
  * per bar and a hidden data table for screen readers.
  * items: [{ label, value, tip }]
  */
-function barChart(title, items, { unit = 'min', every = 1 } = {}) {
+function barChart(title, items, { unit = t('min'), every = 1 } = {}) {
   const max = Math.max(1, ...items.map((d) => d.value));
   return html`<figure class="bars-chart">
     <figcaption>${title}</figcaption>
@@ -48,52 +51,56 @@ function rankList(items, kind) {
 export async function statsView({ query }) {
   const period = query.get('period') || 'month';
   const s = await api.get('/stats/listening', { period });
+  WEEKDAYS = [0, 1, 2, 3, 4, 5, 6].map((d) => new Date(2000, 0, 2 + d).toLocaleDateString(locale(), { weekday: 'short' }));
+  MONTHS = [...Array(12).keys()].map((m) => new Date(2000, m, 1).toLocaleDateString(locale(), { month: 'short' }));
   const v = el(html`<div>
-    <h1 class="page-title">Your stats</h1>
-    <p class="page-sub">What you've been listening to${/^\d{4}$/.test(period) ? ` in ${period}` : ''}.</p>
+    <h1 class="page-title">${t('Your stats')}</h1>
+    <p class="page-sub">${/^\d{4}$/.test(period) ? t("What you've been listening to in {year}.", { year: period }) : t("What you've been listening to.")}</p>
     <div class="toolbar"><div class="chips">
-      ${PERIODS.map(([k, l]) => html`<a class="chip ${k === period ? 'active' : ''}" href="/stats?period=${k}">${l}</a>`)}
-      ${s.years.map((y) => html`<a class="chip ${String(y) === period ? 'active' : ''}" href="/stats?period=${y}">${y} in review</a>`)}
+      ${PERIODS.map(([k, l]) => html`<a class="chip ${k === period ? 'active' : ''}" href="/stats?period=${k}">${t(l)}</a>`)}
+      ${s.years.map((y) => html`<a class="chip ${String(y) === period ? 'active' : ''}" href="/stats?period=${y}">${t('{year} in review', { year: y })}</a>`)}
     </div></div>
     <div class="stats-body"></div>
   </div>`);
   const body = v.querySelector('.stats-body');
   if (!s.totals.plays) {
-    body.replaceWith(el(emptyState('chart', 'Nothing here yet', 'Play some music and your listening stats will show up here.')));
+    body.replaceWith(el(emptyState('chart', t('Nothing here yet'), t('Play some music and your listening stats will show up here.'))));
     return v;
   }
-  const t = s.totals;
-  const minutes = Math.round(t.seconds / 60);
+  const tot = s.totals;
+  const minutes = Math.round(tot.seconds / 60);
   const timeline = s.timeline.map((d) => {
     const [y, m, day] = d.bucket.split('-').map(Number);
-    const label = s.daily ? `${MONTHS[m - 1]} ${day}` : `${MONTHS[m - 1]} ’${String(y).slice(2)}`;
-    return { label, value: d.minutes, tip: `${s.daily ? `${MONTHS[m - 1]} ${day}, ${y}` : `${MONTHS[m - 1]} ${y}`}: ${fmtMinutes(d.minutes)}, ${plural(d.plays, 'play')}` };
+    const date = new Date(y, m - 1, day || 1);
+    const label = s.daily ? date.toLocaleDateString(locale(), { month: 'short', day: 'numeric' }) : `${MONTHS[m - 1]} ’${String(y).slice(2)}`;
+    const long = s.daily ? date.toLocaleDateString(locale(), { year: 'numeric', month: 'short', day: 'numeric' }) : date.toLocaleDateString(locale(), { year: 'numeric', month: 'short' });
+    return { label, value: d.minutes, tip: `${long}: ${fmtMinutes(d.minutes)}, ${plural(d.plays, 'play')}` };
   });
   const peakHour = s.byHour.indexOf(Math.max(...s.byHour));
-  const hourLabel = (h) => new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' });
+  const hourLabel = (h) => new Date(2000, 0, 1, h).toLocaleTimeString(locale(), { hour: 'numeric' });
   body.innerHTML = String(html`
     <div class="stat-tiles">
-      <div class="stat-tile"><b>${fmtMinutes(minutes)}</b><span>listening time</span></div>
-      <div class="stat-tile"><b>${t.plays.toLocaleString()}</b><span>plays</span></div>
-      <div class="stat-tile"><b>${t.tracks.toLocaleString()}</b><span>different songs</span></div>
-      <div class="stat-tile"><b>${t.artists.toLocaleString()}</b><span>artists</span></div>
-      <div class="stat-tile"><b>${hourLabel(peakHour)}</b><span>your favorite hour</span></div>
+      <div class="stat-tile"><b>${fmtMinutes(minutes)}</b><span>${t('listening time')}</span></div>
+      <div class="stat-tile"><b>${tot.plays.toLocaleString()}</b><span>${t('plays')}</span></div>
+      <div class="stat-tile"><b>${tot.tracks.toLocaleString()}</b><span>${t('different songs')}</span></div>
+      <div class="stat-tile"><b>${tot.artists.toLocaleString()}</b><span>${t('artists')}</span></div>
+      <div class="stat-tile"><b>${hourLabel(peakHour)}</b><span>${t('your favorite hour')}</span></div>
     </div>
 
     <div class="stats-grid">
-      <section class="panel"><h3>${ic('mic')} Top artists</h3>${rankList(s.topArtists, 'artist')}</section>
-      <section class="panel"><h3>${ic('disc')} Top albums</h3>${rankList(s.topAlbums, 'album')}</section>
+      <section class="panel"><h3>${ic('mic')} ${t('Top artists')}</h3>${rankList(s.topArtists, 'artist')}</section>
+      <section class="panel"><h3>${ic('disc')} ${t('Top albums')}</h3>${rankList(s.topAlbums, 'album')}</section>
     </div>
 
-    <section class="section"><div class="section-head"><h2>Top songs</h2><button class="btn sm" data-play-top>${ic('play')} Play these</button></div><div class="top-songs"></div></section>
+    <section class="section"><div class="section-head"><h2>${t('Top songs')}</h2><button class="btn sm" data-play-top>${ic('play')} ${t('Play these')}</button></div><div class="top-songs"></div></section>
 
-    ${timeline.length > 1 ? html`<section class="panel chart-panel">${barChart(s.daily ? 'Minutes listened per day' : 'Minutes listened per month', timeline, { every: Math.ceil(timeline.length / 12) })}</section>` : ''}
+    ${timeline.length > 1 ? html`<section class="panel chart-panel">${barChart(s.daily ? t('Minutes listened per day') : t('Minutes listened per month'), timeline, { every: Math.ceil(timeline.length / 12) })}</section>` : ''}
     <div class="stats-grid">
-      <section class="panel chart-panel">${barChart('When you listen (minutes by hour)', s.byHour.map((m, h) => ({ label: h % 3 === 0 ? hourLabel(h) : '', value: m, tip: `${hourLabel(h)}: ${fmtMinutes(m)}` })))}</section>
-      <section class="panel chart-panel">${barChart('Minutes by day of the week', [1, 2, 3, 4, 5, 6, 0].map((d) => ({ label: WEEKDAYS[d], value: s.byWeekday[d], tip: `${WEEKDAYS[d]}: ${fmtMinutes(s.byWeekday[d])}` })))}</section>
+      <section class="panel chart-panel">${barChart(t('When you listen (minutes by hour)'), s.byHour.map((m, h) => ({ label: h % 3 === 0 ? hourLabel(h) : '', value: m, tip: `${hourLabel(h)}: ${fmtMinutes(m)}` })))}</section>
+      <section class="panel chart-panel">${barChart(t('Minutes by day of the week'), [1, 2, 3, 4, 5, 6, 0].map((d) => ({ label: WEEKDAYS[d], value: s.byWeekday[d], tip: `${WEEKDAYS[d]}: ${fmtMinutes(s.byWeekday[d])}` })))}</section>
     </div>
 
-    ${s.topGenres.length ? html`<section class="panel"><h3>${ic('tag')} Top genres</h3>
+    ${s.topGenres.length ? html`<section class="panel"><h3>${ic('tag')} ${t('Top genres')}</h3>
       <div class="genre-pills">${s.topGenres.map((g) => html`<a class="chip" href="/genre/${encodeURIComponent(g.name)}">${g.name} <span class="muted">${g.plays}</span></a>`)}</div></section>` : ''}
   `);
   body.querySelector('.top-songs').replaceWith(trackList(s.topTracks, { head: false }).el);

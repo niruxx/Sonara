@@ -202,7 +202,7 @@ export async function applyMoves(plan, { mode = 'move' } = {}) {
         } else {
           await moveFile(m.from, m.to);
           const st = await fsp.stat(m.to);
-          q('UPDATE tracks SET path = ?, mtime = ?, size = ? WHERE id = ?').run(m.to, Math.floor(st.mtimeMs), st.size, m.id);
+          q('UPDATE tracks SET path = ?, mtime = ?, size = ?, updated_at = ? WHERE id = ?').run(m.to, Math.floor(st.mtimeMs), st.size, Date.now(), m.id);
           // Lyrics with the same name travel along.
           const lrc = m.from.slice(0, -path.extname(m.from).length) + '.lrc';
           if (await exists(lrc)) await moveFile(lrc, m.to.slice(0, -path.extname(m.to).length) + '.lrc').catch(() => {});

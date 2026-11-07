@@ -177,6 +177,13 @@ async function streamGrowing(job, res, mime) {
  */
 export async function serveTranscoded(req, res, track, plan, { wait = false } = {}) {
   const mime = FORMATS[plan.format].mime;
+  // The same source, segment, format and bitrate always give the same bytes, so the cache key
+  // makes a strong ETag, identical whether the file is still being written or finished.
+  // Apps that keep offline copies can revalidate them cheaply.
+  const etag = `"${cacheKey(track, plan)}"`;
+  res.setHeader('ETag', etag);
+  const inm = String(req.headers['if-none-match'] || '');
+  if (inm && inm.split(/\s*,\s*/).some((t) => t === etag || t === `W/${etag}` || t === '*')) return res.status(304).end();
   const job = await startJob(track, plan);
   const range = req.headers.range;
   const fromStart = !range || /^bytes=0-$/.test(range.trim());
@@ -185,7 +192,7 @@ export async function serveTranscoded(req, res, track, plan, { wait = false } = 
     job.promise,
     new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('Transcoding is taking too long'), { status: 504 })), 180000)),
   ]);
-  res.sendFile(file, { headers: { 'Content-Type': mime }, acceptRanges: true, dotfiles: 'allow' }, (err) => {
+  res.sendFile(file, { headers: { 'Content-Type': mime }, acceptRanges: true, dotfiles: 'allow', etag: false }, (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: 'Transcoded file unavailable' });
   });
 }

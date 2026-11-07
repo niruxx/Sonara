@@ -73,15 +73,17 @@ What Sonara already ships:
 
 ---
 
-## Stage 3: Ecosystem compatibility (client apps)
+## Stage 3: Ecosystem compatibility (client apps) ✅
 
-*Goal: use Sonara from the native mobile and desktop apps people already use. This is the biggest parity step versus Navidrome.*
+*Goal: use Sonara from the native mobile and desktop apps people already use. This is the biggest parity step versus Navidrome.* **Status: complete** (Jellyfin endpoints left as a stretch goal).
 
-- [ ] **Subsonic / OpenSubsonic API** (`/rest/*`): browsing, streaming, search, playlists, starring, scrobbling, cover art
-  - Unlocks clients such as Symfonium, DSub, Ultrasonic, Substreamer, play:Sub, Feishin, Sonixd, Supersonic
-- [ ] Per-user API tokens / app passwords (so client apps don't store the main password)
-- [ ] Offline sync support for clients (stable IDs and ETags)
-- [ ] Documented REST API for Sonara's own endpoints (OpenAPI spec)
+- [x] **Subsonic / OpenSubsonic API** (`/rest/*`, API 1.16.1): browsing (ID3 and folder style), album lists, search (an empty query lists everything, for apps that sync the whole library), streaming with byte ranges and transcoding, downloads, cover art, lyrics (plain and synced), starring songs, albums and artists, ratings, scrobbling (Last.fm / ListenBrainz included), now playing, playlists (smart playlists read-only), bookmarks, the play queue (shared with the web player), shares, podcasts, internet radio, users and scans; XML, JSON and JSONP
+  - OpenSubsonic extensions: `apiKeyAuthentication`, `formPost`, `songLyrics`, `getPodcastEpisode`, `indexBasedQueue`
+  - Unlocks clients such as Symfonium, DSub, Ultrasonic, Substreamer, play:Sub, Tempo, Feishin, Sonixd, Supersonic
+  - Folder limits, bitrate caps and permissions apply as in the web app; checked with an independent client library (subsonic-api)
+- [x] Per-user **app passwords** (Settings → Account → Apps): one per app, revocable, with last use shown; they work for token, password and API-key sign-in. Account passwords can be turned off for apps, and never work for accounts with two-factor sign-in
+- [x] **Offline sync support**: stable song ids (kept across rescans, re-tagging, and files moved or renamed outside Sonara), a change feed (`GET /api/library/changes?since=`) with removed songs, `getIndexes` `ifModifiedSince`, and strong ETags on transcoded streams
+- [x] **OpenAPI 3.1 description** of Sonara's own API at `/api/openapi.json`, with a check (`node scripts/list-routes.js --check`) that every route is documented
 - [ ] Optional: Jellyfin-compatible music endpoints (stretch goal)
 
 ---
@@ -154,7 +156,7 @@ What Sonara already ships:
 - [x] Customizable themes and accent overrides; high-contrast mode
 - [x] **Accessibility pass**: skip link, landmarks and `aria-current`, focus moves to each new page's heading, visible keyboard focus everywhere, arrow-key menus that hand focus back when closed, focus-trapped dialogs, a keyboard-operable queue, track changes announced to screen readers, labelled sliders with spoken values, and the system's reduced-motion setting respected
 - [x] **Internationalization**: translation layer with plural rules and locale-aware dates, a language picker (follows the browser by default), and Spanish, French and German for the main interface (navigation, player, queue, library, podcasts, radio, menus)
-- [ ] Translate the remaining screens (Server, Inbox, file management, most admin settings)
+- [x] Translate the remaining screens: Server, Inbox, file management, admin settings, smart playlists, stats, sign-in, album and playlist pages, and the download, share and track-details dialogs (messages sent by the server, such as validation errors, are still in English)
 - [x] Offline playback in the PWA (cache selected albums and playlists)
 - [ ] *Deferred:* Audiobooks (chapters, per-book resume). Playback speed and podcast-style resume cover the basics; dedicated apps such as Audiobookshelf do the rest better
 - [ ] *Deferred:* Desktop wrapper with OS-level media integration (stretch goal)
@@ -215,7 +217,7 @@ What Sonara already ships:
 | ReplayGain | ✅ | ✅ | ✅ | ✅ | 1 |
 | Multi-artist tags | ✅ | ✅ | ✅ | ✅ | 1 |
 | Transcoding | ✅ | ✅ | ✅ | ✅ | 2 |
-| Subsonic API | ✅ | ❌ | ❌ | ❌ | 3 |
+| Subsonic API | ✅ | ❌ | ❌ | ✅ | 3 |
 | Synced lyrics | ✅ | ✅ | ✅ | ✅ | 4 |
 | Smart playlists | ✅ | ❌ | ✅ | ✅ | 4 |
 | Scrobbling | ✅ | ✅ (plugin) | ✅ | ✅ | 4 |

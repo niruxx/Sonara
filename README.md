@@ -20,6 +20,7 @@
 - 🩺 **Easy to run.** Docker image, health check, Prometheus metrics, JSON logs, an in-app log viewer and scan history, backups and restore from the UI, and duplicate / missing-metadata reports.
 - ⌨️ **Keyboard shortcuts**, plus media keys and lock-screen controls (Media Session API).
 - 🔄 **Automatic library scanning.** Folders are watched, so changes show up within seconds, and a scheduled scan catches anything missed. Files that can't be read are listed in Settings.
+- 📲 **Your favourite apps.** Sonara speaks the Subsonic / OpenSubsonic API, so Symfonium, DSub, Ultrasonic, Substreamer, play:Sub, Tempo, Feishin, Supersonic and other Subsonic apps can browse, stream, download for offline, star, rate, scrobble and edit playlists. Each app gets its own revocable app password.
 - 📱 **Works on phones.** The layout is responsive and the app can be installed as a PWA. Save albums and playlists **for offline** and they play without a connection (needs HTTPS or localhost).
 - 🎙️ **Podcasts.** Follow shows by RSS feed (or search the Apple Podcasts directory), and episodes resume where you stopped, on any device. Skip 15 s back or 30 s ahead, mark episodes played, download them to the server (by hand or automatically), and import or export your subscriptions as OPML.
 - 📻 **Internet radio.** Add Icecast and SHOUTcast streams (or `.pls` / `.m3u` links), or search [radio-browser.info](https://www.radio-browser.info). The song that's on air shows in the player.
@@ -29,7 +30,7 @@
 - ⏰ **Wake-up alarm**, **smart shuffle** (no artist twice in a row) and visualizer styles from bars to Milkdrop presets.
 - 🔎 **Library tools.** Identify songs by their sound (AcoustID), see albums you're missing and new releases from your artists (MusicBrainz), import your history from Last.fm, ListenBrainz or Spotify, and import CSV playlists from Spotify or Apple Music.
 - 🏠 **Social and home.** Song requests and voting in listening parties, opt-in friend activity, multi-room playback with Snapcast, Home Assistant over MQTT, and signed webhooks.
-- ♿ **Accessible and translated.** Works with a keyboard and screen readers (skip link, focus handling in menus and dialogs, announced track changes) and follows your system's reduced-motion setting. The interface is available in English, Spanish, French and German.
+- ♿ **Accessible and translated.** Works with a keyboard and screen readers (skip link, focus handling in menus and dialogs, announced track changes) and follows your system's reduced-motion setting. The whole interface is available in English, Spanish, French and German.
 - 🪟 **Mini player** in an always-on-top window (press **P**), colour **themes** or your own accent colour, and a **high-contrast** mode. Admins can **change album covers** by uploading, pasting a link, or picking a picture from the album folder.
 
 - 🔁 **Plays anything.** Formats browsers can't handle (ALAC, WMA, APE, WavPack, AIFF, DSD…) and single-file albums with a `.cue` sheet are converted on the fly. Lower the streaming quality to save mobile data, and download songs, albums or playlists as originals or converted.
@@ -224,6 +225,24 @@ In menus, the arrow keys move between items and `Esc` closes them. In the queue,
 - **Search** for podcasts (Apple Podcasts directory) and stations (radio-browser.info) is off by default; turn it on in Settings → Online services.
 - **Local addresses:** Sonara only fetches podcast feeds and radio streams on your local network (for example a home Icecast server) when an admin adds them. Other users can only add public addresses.
 - Podcasts and radio play in the browser you start them in; they aren't sent to other devices, Chromecast or listening parties.
+
+## Client apps (Subsonic / OpenSubsonic)
+
+Sonara answers the Subsonic API (version 1.16.1, with the OpenSubsonic extensions `apiKeyAuthentication`, `formPost`, `songLyrics`, `getPodcastEpisode` and `indexBasedQueue`) at `/rest`. Apps known to use it include Symfonium, DSub, Ultrasonic, Substreamer, play:Sub and Tempo on phones, and Feishin, Supersonic and Sonixd on computers.
+
+1. In Sonara, open **Settings → Account → Apps** and create an **app password** for the app (for example "Symfonium on my phone"). It's shown once.
+2. In the app, add a Subsonic (or OpenSubsonic / Navidrome) server with Sonara's address (the one in your browser, such as `https://music.example.com`), your username and the app password.
+
+Notes:
+- App passwords work with every sign-in method apps use (token, plain password or API key). Revoke one and only that app is signed out. Settings shows when and from which app each was last used.
+- Apps can also use your account password, unless an admin turns that off (Settings → Sign-in → Client apps) or your account has two-factor sign-in. Token sign-in always needs an app password, because Sonara doesn't store passwords in a form it could use for it.
+- Everything follows your account: library folder limits, the maximum streaming bitrate, and download, playlist and sharing permissions. Stars, ratings, plays, playlists, bookmarks and the play queue are the same ones the web app uses, so you can start an album in an app and finish it in the browser.
+- Streams are sent as the original file unless the app asks for a lower bitrate or another format (needs ffmpeg). Formats phones rarely play (APE, WavPack, DSD, cue-sheet albums) are converted automatically. Albums, artists, playlists, smart playlists (read-only), podcasts and internet radio stations all show up.
+- Song ids don't change when files are re-tagged, rescanned, or moved or renamed (even outside Sonara), so offline copies in apps stay valid. Streams carry ETags for cheap revalidation.
+
+## Sonara's own API
+
+The web app's JSON API is described in OpenAPI 3.1 at `/api/openapi.json` (import it into Postman, Insomnia or an OpenAPI viewer). Apps that keep their own copy of the library can call `GET /api/library/changes?since=<time of the last sync>` to get songs added or changed since then, songs removed, and your favorites. `node scripts/list-routes.js --check` confirms the description covers every route.
 
 ## Multi-room, Home Assistant and webhooks
 

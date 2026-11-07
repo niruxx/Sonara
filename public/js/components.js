@@ -13,7 +13,7 @@ import { t } from './i18n.js';
 export const albumCard = (a, i = 0) => html`
   <a class="card" href="/album/${a.id}" data-album="${a.id}" style="--i:${i}">
     <div class="card-art">${art(a.cover, a.name)}
-      <button class="card-play" data-play-album="${a.id}" aria-label="Play ${a.name}">${ic('play')}</button>
+      <button class="card-play" data-play-album="${a.id}" aria-label="${t('Play {name}', { name: a.name })}">${ic('play')}</button>
     </div>
     <div class="card-title" title="${a.name}">${a.name}</div>
     <div class="card-sub">${a.year ? `${a.year} · ` : ''}<span data-href="/artist/${a.artistId}">${a.artist}</span></div>
@@ -22,7 +22,7 @@ export const albumCard = (a, i = 0) => html`
 export const artistCard = (a, i = 0) => html`
   <a class="card round" href="/artist/${a.id}" style="--i:${i}">
     <div class="card-art">${art(a.cover, a.name, 'artist')}
-      <button class="card-play" data-play-artist="${a.id}" aria-label="Play ${a.name}">${ic('play')}</button>
+      <button class="card-play" data-play-artist="${a.id}" aria-label="${t('Play {name}', { name: a.name })}">${ic('play')}</button>
     </div>
     <div class="card-title">${a.name}</div>
     <div class="card-sub">${a.albumCount != null ? plural(a.albumCount, 'album') : 'Artist'}</div>
@@ -39,7 +39,7 @@ export const playlistCard = (pl, i = 0) => html`
     <div class="card-art">${(pl.covers || []).length >= 4
       ? html`<div style="display:grid;grid-template-columns:1fr 1fr;width:100%;height:100%">${pl.covers.slice(0, 4).map((c) => art(c))}</div>`
       : art(pl.covers?.[0], pl.name, 'playlist')}
-      <button class="card-play" data-play-playlist="${pl.id}" aria-label="Play ${pl.name}">${ic('play')}</button>
+      <button class="card-play" data-play-playlist="${pl.id}" aria-label="${t('Play {name}', { name: pl.name })}">${ic('play')}</button>
     </div>
     <div class="card-title">${pl.name}</div>
     <div class="card-sub">${plural(pl.trackCount, 'song')}</div>
@@ -184,11 +184,11 @@ const DOWNLOAD_FORMATS = [
 /** kind: 'track' | 'album' | 'playlist'. Albums and playlists download as a .zip. */
 export function downloadDialog(kind, id, name) {
   return modal(html`
-    <h3>${ic('download')} Download ${kind === 'track' ? 'song' : kind}</h3>
-    <p>${kind === 'track' ? `“${name}”` : html`“${name}” downloads as a .zip file.`} Converted files take a moment to prepare.</p>
+    <h3>${ic('download')} ${t({ track: 'Download song', album: 'Download album', playlist: 'Download playlist' }[kind])}</h3>
+    <p>${kind === 'track' ? `“${name}”.` : t('“{name}” downloads as a .zip file.', { name })} ${t('Converted files take a moment to prepare.')}</p>
     <div class="dl-options">${DOWNLOAD_FORMATS.map(([k, l, d], i) => html`
-      <label class="dl-option"><input type="radio" name="fmt" value="${k}" ${i === 0 ? 'checked' : ''}><span><b>${l}</b><span class="muted">${d}</span></span></label>`)}</div>
-    <div class="modal-actions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ic('download')} Download</button></div>`, (box, close) => {
+      <label class="dl-option"><input type="radio" name="fmt" value="${k}" ${i === 0 ? 'checked' : ''}><span><b>${t(l)}</b><span class="muted">${t(d)}</span></span></label>`)}</div>
+    <div class="modal-actions"><button class="btn ghost" data-close>${t('Cancel')}</button><button class="btn primary" data-go>${ic('download')} ${t('Download')}</button></div>`, (box, close) => {
     box.querySelector('[data-go]').addEventListener('click', () => {
       const v = box.querySelector('[name=fmt]:checked').value;
       const [format, bitrate] = v === 'original' ? ['raw'] : v.split('-');
@@ -198,7 +198,7 @@ export function downloadDialog(kind, id, name) {
       document.body.append(a);
       a.click();
       a.remove();
-      toast(kind === 'track' ? 'Download starting…' : 'Preparing your .zip, the download starts when it is ready…', { ms: 4000 });
+      toast(kind === 'track' ? t('Download starting…') : t('Preparing your .zip, the download starts when it is ready…'), { ms: 4000 });
       close(true);
     });
   });
@@ -206,9 +206,9 @@ export function downloadDialog(kind, id, name) {
 
 export function ratingMenu(at, track) {
   openMenu(at, [
-    { head: 'Rate this song' },
+    { head: t('Rate this song') },
     ...[5, 4, 3, 2, 1].map((n) => ({ icon: n === track.rating ? 'check' : 'star', label: '★'.repeat(n) + '☆'.repeat(5 - n), action: () => setRating(track, n) })),
-    ...(track.rating ? ['sep', { icon: 'x', label: 'Clear rating', action: () => setRating(track, 0) }] : []),
+    ...(track.rating ? ['sep', { icon: 'x', label: t('Clear rating'), action: () => setRating(track, 0) }] : []),
   ]);
 }
 
@@ -218,45 +218,45 @@ export const artistLinks = (t) => (t.artists?.length > 1
   : html`<a href="/artist/${t.artistId}">${t.artist}</a>`);
 
 const RELEASE_LABEL = { album: 'Album', ep: 'EP', single: 'Single', compilation: 'Compilation', live: 'Live', soundtrack: 'Soundtrack', remix: 'Remix', other: 'Other' };
-export const releaseLabel = (type, compilation) => (compilation ? 'Compilation' : RELEASE_LABEL[type] || (type ? type[0].toUpperCase() + type.slice(1) : 'Album'));
+export const releaseLabel = (type, compilation) => t(compilation ? 'Compilation' : RELEASE_LABEL[type] || (type ? type[0].toUpperCase() + type.slice(1) : 'Album'));
 
 const fmtGain = (g) => (g == null ? null : `${g > 0 ? '+' : ''}${g.toFixed(2)} dB`);
 
 export async function trackDetails(track) {
-  let t;
-  try { t = await api.get(`/tracks/${track.id}`); } catch (err) { toastError(err); return; }
+  let d;
+  try { d = await api.get(`/tracks/${track.id}`); } catch (err) { toastError(err); return; }
   const rows = [
-    ['Title', t.title],
-    ['Artists', t.artists.map((a) => a.name).join(', ')],
-    ['Album', t.album],
-    ['Album artist', t.albumArtists?.map((a) => a.name).join(', ') || t.albumArtist],
-    ['Track', t.trackNo ? `${t.trackNo}${t.discNo ? ` · disc ${t.discNo}` : ''}` : null],
-    ['Year', t.year ? `${t.year}${t.originalYear && t.originalYear !== t.year ? ` (originally ${t.originalYear})` : ''}` : null],
-    ['Release type', t.releaseType || t.compilation ? releaseLabel(t.releaseType, t.compilation) : null],
-    ['Genres', t.genres?.join(', ')],
-    ['Duration', fmtTime(t.duration)],
-    ['Format', [t.format, t.codec].filter(Boolean).join(' · ')],
-    ['Playback', t.cue ? `Part of a cue sheet (${fmtTime(t.cueStart)}–${t.cueEnd != null ? fmtTime(t.cueEnd) : 'end'}), cut out by the server` : t.needsTranscode ? 'Converted by the server while playing (browsers can’t play this format)' : null],
-    ['Bitrate', t.bitrate ? `${Math.round(t.bitrate / 1000)} kbps` : null],
-    ['Sample rate', t.sampleRate ? `${(t.sampleRate / 1000).toFixed(1)} kHz` : null],
-    ['Size', t.size ? fmtBytes(t.size) : null],
-    ['ReplayGain (track)', [fmtGain(t.rgTrackGain), t.rgTrackPeak ? `peak ${t.rgTrackPeak.toFixed(3)}` : null].filter(Boolean).join(', ') || null],
-    ['ReplayGain (album)', [fmtGain(t.rgAlbumGain), t.rgAlbumPeak ? `peak ${t.rgAlbumPeak.toFixed(3)}` : null].filter(Boolean).join(', ') || null],
-    ['Tempo', t.bpm ? `${Math.round(t.bpm)} BPM` : null],
-    ['Key', t.musicalKey ? `${t.musicalKey}${t.camelot ? ` · ${t.camelot}` : ''}` : null],
-    ['Energy', t.energy != null ? `${Math.round(t.energy * 100)} / 100` : null],
-    ['Measured loudness', t.calcTrackGain != null ? `${(-18 - t.calcTrackGain).toFixed(1)} LUFS (gain ${fmtGain(t.calcTrackGain)})` : null],
-    ['Your plays', String(t.playCount || 0)],
-    ['Last played', t.lastPlayed ? new Date(t.lastPlayed).toLocaleString() : null],
-    ['Added', new Date(t.addedAt).toLocaleDateString()],
-    ['MusicBrainz', t.mbzTrackId || t.mbzAlbumId ? 'Tagged' : null],
-    ['File', t.file],
+    ['Title', d.title],
+    ['Artists', d.artists.map((a) => a.name).join(', ')],
+    ['Album', d.album],
+    ['Album artist', d.albumArtists?.map((a) => a.name).join(', ') || d.albumArtist],
+    ['Track', d.trackNo ? `${d.trackNo}${d.discNo ? ` · ${t('disc {n}', { n: d.discNo })}` : ''}` : null],
+    ['Year', d.year ? `${d.year}${d.originalYear && d.originalYear !== d.year ? ` ${t('(originally {year})', { year: d.originalYear })}` : ''}` : null],
+    ['Release type', d.releaseType || d.compilation ? releaseLabel(d.releaseType, d.compilation) : null],
+    ['Genres', d.genres?.join(', ')],
+    ['Duration', fmtTime(d.duration)],
+    ['Format', [d.format, d.codec].filter(Boolean).join(' · ')],
+    ['Playback', d.cue ? t('Part of a cue sheet ({from}–{to}), cut out by the server', { from: fmtTime(d.cueStart), to: d.cueEnd != null ? fmtTime(d.cueEnd) : t('end') }) : d.needsTranscode ? t('Converted by the server while playing (browsers can’t play this format)') : null],
+    ['Bitrate', d.bitrate ? `${Math.round(d.bitrate / 1000)} kbps` : null],
+    ['Sample rate', d.sampleRate ? `${(d.sampleRate / 1000).toFixed(1)} kHz` : null],
+    ['Size', d.size ? fmtBytes(d.size) : null],
+    ['ReplayGain (track)', [fmtGain(d.rgTrackGain), d.rgTrackPeak ? t('peak {n}', { n: d.rgTrackPeak.toFixed(3) }) : null].filter(Boolean).join(', ') || null],
+    ['ReplayGain (album)', [fmtGain(d.rgAlbumGain), d.rgAlbumPeak ? t('peak {n}', { n: d.rgAlbumPeak.toFixed(3) }) : null].filter(Boolean).join(', ') || null],
+    ['Tempo', d.bpm ? `${Math.round(d.bpm)} BPM` : null],
+    ['Key', d.musicalKey ? `${d.musicalKey}${d.camelot ? ` · ${d.camelot}` : ''}` : null],
+    ['Energy', d.energy != null ? `${Math.round(d.energy * 100)} / 100` : null],
+    ['Measured loudness', d.calcTrackGain != null ? t('{lufs} LUFS (gain {gain})', { lufs: (-18 - d.calcTrackGain).toFixed(1), gain: fmtGain(d.calcTrackGain) }) : null],
+    ['Your plays', String(d.playCount || 0)],
+    ['Last played', d.lastPlayed ? new Date(d.lastPlayed).toLocaleString() : null],
+    ['Added', new Date(d.addedAt).toLocaleDateString()],
+    ['MusicBrainz', d.mbzTrackId || d.mbzAlbumId ? t('Tagged') : null],
+    ['File', d.file],
   ].filter(([, v]) => v);
   modal(html`
-    <h3>Track details</h3>
-    <div class="stars" data-stars>${[1, 2, 3, 4, 5].map((n) => html`<button class="star ${n <= t.rating ? 'on' : ''}" data-n="${n}" aria-label="${n} stars">${ic(n <= t.rating ? 'starFill' : 'star')}</button>`)}</div>
-    <dl class="details">${rows.map(([k, v]) => html`<dt>${k}</dt><dd class="${k === 'File' ? 'mono' : ''}">${v}</dd>`)}</dl>
-    <div class="modal-actions"><button class="btn primary" data-close>Close</button></div>`, (box) => {
+    <h3>${t('Track details')}</h3>
+    <div class="stars" data-stars>${[1, 2, 3, 4, 5].map((n) => html`<button class="star ${n <= d.rating ? 'on' : ''}" data-n="${n}" aria-label="${plural(n, 'star')}">${ic(n <= d.rating ? 'starFill' : 'star')}</button>`)}</div>
+    <dl class="details">${rows.map(([k, v]) => html`<dt>${t(k)}</dt><dd class="${k === 'File' ? 'mono' : ''}">${v}</dd>`)}</dl>
+    <div class="modal-actions"><button class="btn primary" data-close>${t('Close')}</button></div>`, (box) => {
     box.querySelector('[data-stars]').addEventListener('click', async (e) => {
       const b = e.target.closest('[data-n]');
       if (!b) return;
@@ -273,10 +273,10 @@ export async function trackDetails(track) {
 
 export function playlistPicker(at, tracks) {
   const editable = state.playlists.filter((pl) => pl.canEdit !== false);
-  if (!state.user.permissions?.playlists) return toast("You don't have permission to edit playlists", { type: 'error' });
+  if (!state.user.permissions?.playlists) return toast(t("You don't have permission to edit playlists"), { type: 'error' });
   openMenu(at, [
-    { head: 'Add to playlist' },
-    { icon: 'plus', label: 'New playlist…', action: () => createPlaylist(tracks.map((t) => t.id)) },
+    { head: t('Add to playlist') },
+    { icon: 'plus', label: t('New playlist…'), action: () => createPlaylist(tracks.map((tr) => tr.id)) },
     ...(editable.length ? ['sep'] : []),
     ...editable.map((pl) => ({ icon: pl.owned === false ? 'users' : 'listMusic', label: pl.owned === false ? `${pl.name} (${pl.owner})` : pl.name, action: () => addToPlaylist(pl, tracks) })),
   ]);
@@ -292,19 +292,19 @@ const EXPIRY = [[1, '1 day'], [7, '1 week'], [30, '30 days'], [365, '1 year'], [
 /** kind: 'track' | 'album' | 'playlist'. Creates a public link anyone can open without an account. */
 export function shareDialog(kind, id, name) {
   return modal(html`
-    <h3>${ic('share')} Share ${kind === 'track' ? 'song' : kind}</h3>
-    <p>Anyone with the link can listen to “${name}”, without an account.${kind === 'playlist' ? ' It shows the playlist as it is when they open it.' : ''}</p>
+    <h3>${ic('share')} ${t({ track: 'Share song', album: 'Share album', playlist: 'Share playlist' }[kind])}</h3>
+    <p>${t('Anyone with the link can listen to “{name}”, without an account.', { name })}${kind === 'playlist' ? ` ${t('It shows the playlist as it is when they open it.')}` : ''}</p>
     <div class="share-form">
-      <label class="muted">Link expires after</label>
-      <div class="seg2" data-exp>${EXPIRY.map(([d, l]) => html`<button type="button" class="seg-btn ${d === 7 ? 'on' : ''}" data-days="${d}">${l}</button>`)}</div>
-      ${canDownload() ? html`<label class="check" style="margin-top:12px"><input type="checkbox" data-dl><span class="sw"></span>Allow downloading</label>` : ''}
+      <label class="muted">${t('Link expires after')}</label>
+      <div class="seg2" data-exp>${EXPIRY.map(([d, l]) => html`<button type="button" class="seg-btn ${d === 7 ? 'on' : ''}" data-days="${d}">${t(l)}</button>`)}</div>
+      ${canDownload() ? html`<label class="check" style="margin-top:12px"><input type="checkbox" data-dl><span class="sw"></span>${t('Allow downloading')}</label>` : ''}
     </div>
     <div class="share-result" hidden>
-      <div class="copy-row"><input class="input mono" readonly data-url><button class="btn sm primary" data-copy>${ic('copy')} Copy</button></div>
+      <div class="copy-row"><input class="input mono" readonly data-url><button class="btn sm primary" data-copy>${ic('copy')} ${t('Copy')}</button></div>
       <p class="muted" data-exp-note style="margin-top:8px"></p>
     </div>
     <div class="form-error"></div>
-    <div class="modal-actions"><button class="btn ghost" data-close>Close</button><button class="btn primary" data-create>${ic('link')} Create link</button></div>`, (box) => {
+    <div class="modal-actions"><button class="btn ghost" data-close>${t('Close')}</button><button class="btn primary" data-create>${ic('link')} ${t('Create link')}</button></div>`, (box) => {
     let days = 7;
     box.querySelector('[data-exp]').addEventListener('click', (e) => {
       const b = e.target.closest('[data-days]');
@@ -320,7 +320,7 @@ export function shareDialog(kind, id, name) {
         box.querySelector('.share-form').hidden = true;
         box.querySelector('.share-result').hidden = false;
         box.querySelector('[data-url]').value = s.url;
-        box.querySelector('[data-exp-note]').textContent = s.expiresAt ? `Expires ${new Date(s.expiresAt).toLocaleString()}. Manage your links in Settings.` : 'Never expires. Manage your links in Settings.';
+        box.querySelector('[data-exp-note]').textContent = s.expiresAt ? t('Expires {date}. Manage your links in Settings.', { date: new Date(s.expiresAt).toLocaleString() }) : t('Never expires. Manage your links in Settings.');
         create.hidden = true;
         copyText(s.url);
       } catch (err) {
@@ -335,15 +335,15 @@ export function shareDialog(kind, id, name) {
 export async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
-    toast('Link copied', { type: 'success', ms: 1600 });
+    toast(t('Link copied'), { type: 'success', ms: 1600 });
   } catch {
     // Clipboard API needs HTTPS; fall back to a selection copy.
-    const t = el(html`<textarea style="position:fixed;opacity:0">${text}</textarea>`);
-    document.body.append(t);
-    t.select();
+    const ta = el(html`<textarea style="position:fixed;opacity:0">${text}</textarea>`);
+    document.body.append(ta);
+    ta.select();
     const ok = document.execCommand('copy');
-    t.remove();
-    toast(ok ? 'Link copied' : 'Copy the link from the box', { type: ok ? 'success' : 'info', ms: 2000 });
+    ta.remove();
+    toast(ok ? t('Link copied') : t('Copy the link from the box'), { type: ok ? 'success' : 'info', ms: 2000 });
   }
 }
 
@@ -355,20 +355,21 @@ export async function copyText(text) {
  */
 export function trackList(initial = [], opts = {}) {
   const list = el(html`<div class="tracklist ${opts.album === false ? 'compact' : ''}">
-    ${opts.head !== false ? html`<div class="tl-head"><span>#</span><span>Title</span>${opts.album !== false ? html`<span class="h-album">Album</span>` : ''}<span class="r h-dur">${ic('clock')}</span><span></span></div>` : ''}
+    ${opts.head !== false ? html`<div class="tl-head"><span>#</span><span>${t('Title')}</span>${opts.album !== false ? html`<span class="h-album">${t('Album')}</span>` : ''}<span class="r h-dur">${ic('clock')}</span><span></span></div>` : ''}
     <div class="tl-body"></div></div>`);
   const body = list.querySelector('.tl-body');
   const tracks = [];
   let lastDisc = null;
   const multiDisc = opts.discs && new Set(initial.map((t) => t.discNo || 1)).size > 1;
 
+  const L = { play: t('Play'), fav: t('Favorite'), more: t('More') };
   const row = (t, i) => {
     const num = opts.numbered ? t.trackNo || i + 1 : i + 1;
     const cur = player.current?.id === t.id;
     return html`
       <div class="tl-row ${cur ? 'is-current' : ''}" data-i="${i}" data-track-id="${t.id}" style="--i:${i % 40}" ${opts.playlist ? 'draggable="true"' : ''}>
         <div class="tl-num"><span class="n">${num}</span><span class="eq"><i></i><i></i><i></i><i></i></span>
-          <button class="tl-play" data-act="play" aria-label="Play">${ic('play')}</button></div>
+          <button class="tl-play" data-act="play" aria-label="${L.play}">${ic('play')}</button></div>
         <div class="tl-main">
           ${opts.cover !== false ? html`<div class="tl-cover">${art(t.cover, t.album)}</div>` : ''}
           <div class="tl-text">
@@ -379,8 +380,8 @@ export function trackList(initial = [], opts = {}) {
         ${opts.album !== false ? html`<div class="tl-album"><a href="/album/${t.albumId}">${t.album}</a></div>` : ''}
         <div class="tl-dur r">${fmtTime(t.duration)}</div>
         <div class="tl-actions">
-          <button class="icon-btn sm heart ${t.favorite ? 'on' : ''}" data-act="fav" data-fav="${t.id}" aria-label="Favorite">${ic(t.favorite ? 'heartFill' : 'heart')}</button>
-          <button class="icon-btn sm" data-act="more" aria-label="More">${ic('more')}</button>
+          <button class="icon-btn sm heart ${t.favorite ? 'on' : ''}" data-act="fav" data-fav="${t.id}" aria-label="${L.fav}">${ic(t.favorite ? 'heartFill' : 'heart')}</button>
+          <button class="icon-btn sm" data-act="more" aria-label="${L.more}">${ic('more')}</button>
         </div>
       </div>`;
   };
@@ -429,8 +430,8 @@ export function trackList(initial = [], opts = {}) {
     trackMenu(e, t, { extra: extraItems(t) });
   });
 
-  const extraItems = (t) => opts.playlist
-    ? [{ icon: 'trash', label: 'Remove from playlist', danger: true, action: () => opts.playlist.onRemove(t) }]
+  const extraItems = (tr) => opts.playlist
+    ? [{ icon: 'trash', label: t('Remove from playlist'), danger: true, action: () => opts.playlist.onRemove(tr) }]
     : [];
 
   if (opts.playlist?.onReorder) {

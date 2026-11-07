@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { prefs, plural, fmtBytes } from './util.js';
 import { toast, toastError } from './ui.js';
 import { Emitter } from './util.js';
+import { t } from './i18n.js';
 
 const CACHE = 'sonara-offline';
 export const offline = new Emitter();
@@ -30,7 +31,7 @@ function keptIds(except) {
 }
 
 export async function saveOffline(kind, id, name, tracks, cover) {
-  if (!supported) return toast('Offline music needs Sonara to be opened over HTTPS (or on localhost)', { type: 'error', ms: 5000 });
+  if (!supported) return toast(t('Offline music needs Sonara to be opened over HTTPS (or on localhost)'), { type: 'error', ms: 5000 });
   const k = key(kind, id);
   if (busy.has(k)) return;
   busy.add(k);
@@ -39,7 +40,7 @@ export async function saveOffline(kind, id, name, tracks, cover) {
     const cache = await caches.open(CACHE);
     let bytes = 0;
     let done = 0;
-    toast(`Saving “${name}” for offline (${plural(tracks.length, 'song')})…`, { ms: 3000 });
+    toast(t('Saving “{name}” for offline ({songs})…', { name, songs: plural(tracks.length, 'song') }), { ms: 3000 });
     for (const t of tracks) {
       const k2 = `/offline/track/${t.id}`;
       const have = await cache.match(k2);
@@ -61,7 +62,7 @@ export async function saveOffline(kind, id, name, tracks, cover) {
     const i = index();
     i[k] = { key: k, kind, id, name, cover: cover || tracks.find((t) => t.cover)?.cover || null, trackIds: tracks.map((t) => t.id), bytes, savedAt: Date.now() };
     saveIndex(i);
-    toast(`“${name}” is available offline (${fmtBytes(bytes)})`, { type: 'success' });
+    toast(t('“{name}” is available offline ({size})', { name, size: fmtBytes(bytes) }), { type: 'success' });
   } catch (err) {
     toastError(err);
   } finally { busy.delete(k); }
@@ -77,7 +78,7 @@ export async function removeOffline(kind, id) {
   const i = index();
   delete i[k];
   saveIndex(i);
-  toast(`Removed “${entry.name}” from this device`);
+  toast(t('Removed “{name}” from this device', { name: entry.name }));
 }
 
 export async function clearOffline() {
@@ -89,8 +90,8 @@ export async function clearOffline() {
 export function offlineItems(kind, id, name, tracks, cover) {
   if (!supported || !tracks?.length) return [];
   return isOffline(kind, id)
-    ? [{ icon: 'check', label: 'Saved on this device · remove', action: () => removeOffline(kind, id) }]
-    : [{ icon: 'download', label: 'Make available offline', action: () => saveOffline(kind, id, name, tracks, cover) }];
+    ? [{ icon: 'check', label: t('Saved on this device · remove'), action: () => removeOffline(kind, id) }]
+    : [{ icon: 'download', label: t('Make available offline'), action: () => saveOffline(kind, id, name, tracks, cover) }];
 }
 
 export async function storageInfo() {

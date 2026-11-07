@@ -47,6 +47,7 @@ import { discographyApi } from './discography.js';
 import { historyApi } from './history.js';
 import { setupSnapcast, snapcastStatus, snapcastRooms } from './snapcast.js';
 import { webhooksApi, setupIntegrations, mqttStatus } from './integrations.js';
+import { appPasswordsApi } from './apppasswords.js';
 
 export const api = express.Router();
 api.use(express.json({ limit: '1mb' }));
@@ -161,6 +162,9 @@ const fixTrack = (t) => {
 };
 const tracks = (rows) => rows.map(fixTrack);
 const idParam = (v) => int(v, 0, 0, Number.MAX_SAFE_INTEGER);
+
+// Shared with the Subsonic API (subsonic.js).
+export { TRACK_COLS, TRACK_JOINS, TRACK_FROM, ALBUM_COLS, ALBUM_USER_COLS, ALBUM_USER_JOINS, ARTIST_IMAGE, fixTrack, tracks as fixTracks, tracksByIds, smartTracks, int, idParam };
 
 // ───────────────────────── Auth ─────────────────────────
 
@@ -774,6 +778,44 @@ api.get('/radio', h(async (req, res) => {
   res.json(ids.map((id) => byId.get(id)).filter(Boolean));
 }));
 
+// ───────────────────────── Sync (apps that keep an offline copy) ─────────────────────────
+
+// Removed songs are remembered this long; a client that last synced earlier starts over.
+export const TOMBSTONE_DAYS = 180;
+
+/**
+ * What changed in the library since a point in time, for apps that keep their own copy.
+ * ?since=<ms, from the previous answer's `now`> &cursor=<from `next`> &limit=1-5000
+ * Song ids are stable: re-tagging, re-scanning, and moving or renaming files (in Sonara or
+ * outside it) keep them, so offline copies, favorites and playlists stay attached.
+ */
+api.get('/library/changes', (req, res) => {
+  const now = Date.now();
+  let since = Math.max(0, Number(req.query.since) || 0);
+  const reset = since > 0 && since < now - TOMBSTONE_DAYS * 86400000;
+  if (reset) since = 0;
+  const limit = int(req.query.limit, 1000, 1, 5000);
+  // Cursor "updatedAt:id" continues a page within the same sync.
+  const [cAt, cId] = String(req.query.cursor || '').split(':').map(Number);
+  const after = req.query.cursor && Number.isFinite(cAt) && Number.isFinite(cId) ? { at: cAt, id: cId } : { at: since, id: -1 };
+  const rows = q(`SELECT ${TRACK_COLS}, t.updated_at AS updatedAt ${TRACK_FROM}
+    WHERE t.updated_at > $at OR (t.updated_at = $at AND t.id > $id)
+    ORDER BY t.updated_at, t.id LIMIT $lim`).all({ uid: req.user.id, at: after.at, id: after.id, lim: limit + 1 });
+  const more = rows.length > limit;
+  if (more) rows.pop();
+  const last = rows.at(-1);
+  res.json({
+    now,
+    reset, // true: drop everything you have and take this as the whole library
+    tracks: tracks(rows),
+    // Only on the first page of a sync, so paging doesn't repeat them.
+    removed: since && !req.query.cursor ? q('SELECT track_id AS id FROM track_tombstones WHERE removed_at >= ?').all(since).map((r) => r.id) : [],
+    favorites: req.query.cursor ? undefined : q('SELECT track_id AS id FROM favorites WHERE user_id = ?').all(req.user.id).map((r) => r.id),
+    more,
+    next: more ? `${last.updatedAt}:${last.id}` : null,
+  });
+});
+
 // ───────────────────────── Smart playlists ─────────────────────────
 
 const SMART_COLS = 'id, name, description, rules, sort, max_tracks AS maxTracks, created_at AS createdAt, updated_at AS updatedAt';
@@ -1254,6 +1296,7 @@ admin.get('/settings', (req, res) => {
     onlinePodcastDirectory: !!c.onlinePodcastDirectory, onlineRadioDirectory: !!c.onlineRadioDirectory, onlineDiscography: !!c.onlineDiscography,
     podcastRefreshHours: Number(c.podcastRefreshHours ?? 6), podcastDownloadMB: Number(c.podcastDownloadMB) || 1024,
     analysis: c.analysis !== false,
+    subsonic: c.subsonic !== false, subsonicMainPassword: c.subsonicMainPassword !== false,
     snapcast: !!c.snapcast, snapcastHost: c.snapcastHost || '127.0.0.1', snapcastPort: Number(c.snapcastPort) || 4953, snapcastStatus: snapcastStatus(),
     mqttUrl: c.mqttUrl ? String(c.mqttUrl).replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:••••@') : '', mqttPrefix: c.mqttPrefix || 'sonara', mqttStatus: mqttStatus(),
     acoustidApiKey: c.acoustidApiKey || '', fingerprint: fingerprintStatus(),
@@ -1308,7 +1351,7 @@ admin.put('/settings', (req, res) => {
   if (b.snapcastPort != null) patch.snapcastPort = int(b.snapcastPort, 4953, 1, 65535);
   if (b.mqttUrl != null && !String(b.mqttUrl).includes('••••')) patch.mqttUrl = String(b.mqttUrl).trim().slice(0, 500);
   if (b.mqttPrefix != null) patch.mqttPrefix = String(b.mqttPrefix).trim().replace(/[#+\s]/g, '').slice(0, 60) || 'sonara';
-  for (const k of ['sharing', 'importPlaylists', 'jukebox', 'dlna', 'proxyAuthAutoCreate', 'oidcAutoCreate', 'logRequests', 'metrics']) if (b[k] != null) patch[k] = !!b[k];
+  for (const k of ['subsonic', 'subsonicMainPassword', 'sharing', 'importPlaylists', 'jukebox', 'dlna', 'proxyAuthAutoCreate', 'oidcAutoCreate', 'logRequests', 'metrics']) if (b[k] != null) patch[k] = !!b[k];
   for (const k of ['proxyAuthHeader', 'oidcIssuer', 'oidcClientId', 'oidcClientSecret', 'oidcLabel', 'oidcUsernameClaim', 'oidcAdminGroup', 'metricsToken', 'mpvPath']) {
     if (b[k] != null) patch[k] = String(b[k]).trim().slice(0, 500);
   }
@@ -1473,7 +1516,7 @@ admin.get('/reports/missing', (_req, res) => {
     const c = q(`SELECT COUNT(*) AS tracks, COUNT(DISTINCT t.album_id) AS albums FROM tracks t WHERE ${where}`).get();
     const albums = q(`SELECT t.album_id AS id, MAX(t.album) AS name, MAX(t.album_artist) AS artist, MAX(t.cover) AS cover, COUNT(*) AS n
       FROM tracks t WHERE ${where} GROUP BY t.album_id ORDER BY n DESC LIMIT 60`).all();
-    out[k] = { label, ...c, albums };
+    out[k] = { label, tracks: c.tracks, albumCount: c.albums, albums };
   }
   res.json({ total: q('SELECT COUNT(*) AS n FROM tracks').get().n, checks: out });
 });
@@ -1752,6 +1795,7 @@ api.use('/bookmarks', bookmarksApi);
 api.use(discographyApi);
 api.use('/me/history', historyApi);
 api.use('/me/webhooks', webhooksApi);
+api.use('/me/app-passwords', appPasswordsApi);
 api.use('/podcasts', podcastsApi);
 api.use('/stations', stationsApi);
 

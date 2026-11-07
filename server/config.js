@@ -58,6 +58,11 @@ const DEFAULTS = {
   // Analyse the library in the background with ffmpeg (waveforms, loudness, tempo, key, "sounds like").
   analysis: true,
   sessionDays: 30,
+  // Client apps (Symfonium, DSub, Feishin…) through the Subsonic / OpenSubsonic API at /rest.
+  subsonic: true,
+  // Let client apps sign in with the account password too (sent with every request), not only
+  // with app passwords. Accounts with two-factor sign-in always need an app password.
+  subsonicMainPassword: true,
   // Public URL people use to reach Sonara (e.g. https://music.example.com). Used for share
   // links, single sign-on and casting. '' = work it out from each request.
   publicUrl: '',

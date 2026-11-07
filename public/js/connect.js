@@ -5,6 +5,7 @@ import { api } from './api.js';
 import { Emitter, shuffleArray } from './util.js';
 import { player, deviceId, deviceName } from './player.js';
 import { toast, toastError } from './ui.js';
+import { t as tr } from './i18n.js';
 
 const tabId = (() => {
   let t = sessionStorage.getItem('sonara.tab');
@@ -80,7 +81,7 @@ async function onCommand({ cmd, args = {} }) {
       const index = Math.min(Math.max(0, Number(args.index) || 0), tracks.length - 1);
       if (['off', 'all', 'one'].includes(args.repeat)) player.repeat = args.repeat;
       player.playList(tracks, index, { time: Number(args.time) || 0 });
-      if (args.from) toast(`Playing here, moved from ${args.from}`);
+      if (args.from) toast(tr('Playing here, moved from {name}', { name: args.from }));
       return;
     }
     case 'handoff': {
@@ -126,7 +127,7 @@ export async function moveTo(dev) {
 export function controlDevice(dev) {
   const target = dev.kind === 'cast' ? dev : serverTarget(dev);
   player.enterRemote(target);
-  toast(`Controlling ${dev.name}`);
+  toast(tr('Controlling {name}', { name: dev.name }));
 }
 
 /** Bring playback back to this tab (pulling the queue from a browser device when we can). */
@@ -157,7 +158,7 @@ function loadCast() {
   if (castReady) return castReady;
   castReady = new Promise((resolve, reject) => {
     window.__onGCastApiAvailable = (ok) => {
-      if (!ok) return reject(new Error('Casting is not available in this browser'));
+      if (!ok) return reject(new Error(tr('Casting is not available in this browser')));
       const ctx = cast.framework.CastContext.getInstance();
       ctx.setOptions({ receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID, autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED });
       resolve(ctx);
@@ -166,7 +167,7 @@ function loadCast() {
     s.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
     s.onerror = () => reject(new Error("Couldn't load the Cast library (are you offline?)"));
     document.head.append(s);
-    setTimeout(() => reject(new Error('Casting took too long to start')), 15000);
+    setTimeout(() => reject(new Error(tr('Casting took too long to start'))), 15000);
   });
   castReady.catch(() => { castReady = null; });
   return castReady;
@@ -236,7 +237,7 @@ export async function startCast() {
     });
     player.enterRemote(target);
     await target.load(index, startTime);
-    toast(`Casting to ${target.name}`);
+    toast(tr('Casting to {name}', { name: target.name }));
   } catch (err) {
     if (err?.code === 'cancel' || err === 'cancel') return;
     toastError(err?.description || err);
@@ -256,12 +257,12 @@ async function followParty(state) {
     const expected = state.playing ? state.time + 0.25 : state.time;
     if (!state.track) return;
     if (!isLib(state.track)) {
-      if (follow.warned !== state.track.id) { follow.warned = state.track.id; toast(`The host is playing ${state.track.live ? 'a radio station' : 'a podcast'}, which can't be shared in a party`); }
+      if (follow.warned !== state.track.id) { follow.warned = state.track.id; toast(tr(state.track.live ? "The host is playing a radio station, which can't be shared in a party" : "The host is playing a podcast, which can't be shared in a party")); }
       return;
     }
     if (player.local.current?.id !== state.track.id) {
       const [t] = await lookup([state.track.id]);
-      if (!t) { toast(`“${state.track.title}” isn't in your library`, { type: 'error' }); return; }
+      if (!t) { toast(tr("“{title}” isn't in your library", { title: state.track.title }), { type: 'error' }); return; }
       const lag = (performance.now() - follow.receivedAt) / 1000;
       player.playList([t], 0, { time: expected + (state.playing ? lag : 0), autoplay: state.playing });
       return;
@@ -287,7 +288,7 @@ export async function joinParty(id) {
     if (player.remote) player.leaveRemote({ quiet: true });
     connect.party = await api.post(`/party/${id}/join`, { device: clientId });
     connect.emit('party', connect.party);
-    toast(`Joined ${connect.party.host}'s listening party`, { type: 'success' });
+    toast(tr("Joined {name}'s listening party", { name: connect.party.host }), { type: 'success' });
     followParty(connect.party.state);
   } catch (err) { toastError(err); }
 }
@@ -314,7 +315,7 @@ export function startConnect() {
       // The device we were controlling went away.
       if (player.remote && player.remote.kind !== 'cast' && !connect.devices.some((d) => d.id === player.remote.id)) {
         player.leaveRemote();
-        toast('The device you were controlling disconnected');
+        toast(tr('The device you were controlling disconnected'));
       }
       connect.emit('devices', connect.devices);
     });
@@ -332,7 +333,7 @@ export function startConnect() {
         if (connect.party?.id === p.id) {
           connect.party = null;
           connect.emit('party', null);
-          if (p.hostClient !== clientId) toast('The listening party has ended');
+          if (p.hostClient !== clientId) toast(tr('The listening party has ended'));
         }
         return;
       }
