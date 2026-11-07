@@ -567,7 +567,7 @@ body:not(.playing) .eq i { animation-play-state: paused; }
 .menu-item.danger:hover { background: rgba(239,68,68,.18); color: #fca5a5; }
 .menu-sep { height: 1px; background: var(--border); margin: 5px 8px; }
 .menu-head { padding: 8px 12px 6px; font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); }
-.menu-scroll { max-height: 240px; overflow-y: auto; }
+.menu-scroll { max-height: min(240px, 50vh); overflow-y: auto; overscroll-behavior: contain; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 20px; background: rgba(4,3,8,.55); backdrop-filter: blur(10px); animation: fadeIn .3s var(--ease); }
 .modal-backdrop.out { animation: fadeOut .2s ease-in forwards; }

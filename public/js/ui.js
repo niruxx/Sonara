@@ -16,10 +16,12 @@ export const toastError = (err) => toast(err?.message || String(err), { type: 'e
 // ───────── Context menus ─────────
 
 let openMenuEl = null;
+let menuAnchor = null;   // { el, dx, dy }: the button a menu hangs from, so it can follow page scrolling
 export function closeMenu() {
   if (!openMenuEl) return;
   const m = openMenuEl;
   openMenuEl = null;
+  menuAnchor = null;
   m.classList.add('out');
   m.addEventListener('animationend', () => m.remove(), { once: true });
 }
@@ -61,6 +63,10 @@ export function openMenu(at, items) {
   m.style.left = Math.max(8, x) + 'px';
   m.style.top = Math.max(8, y) + 'px';
   openMenuEl = m;
+  if (at instanceof Element) {
+    const r = at.getBoundingClientRect();
+    menuAnchor = { el: at, dx: Math.max(8, x) - r.left, dy: Math.max(8, y) - r.top };
+  }
   m.querySelector('.menu-item')?.focus({ preventScroll: true });
   return m;
 }
@@ -68,7 +74,17 @@ export function openMenu(at, items) {
 addEventListener('pointerdown', (e) => { if (openMenuEl && !openMenuEl.contains(e.target)) closeMenu(); }, true);
 addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 addEventListener('resize', closeMenu);
-addEventListener('scroll', closeMenu, true);
+// Scrolling inside the menu is just scrolling. Scrolling the page moves a menu that hangs
+// from a button along with it; it only closes once that button has scrolled out of view.
+addEventListener('scroll', (e) => {
+  if (!openMenuEl || openMenuEl.contains(e.target)) return;
+  if (!menuAnchor) return; // right-click menus stay where they were opened
+  const { el: a, dx, dy } = menuAnchor;
+  const r = a.getBoundingClientRect();
+  if (!a.isConnected || r.bottom < 0 || r.top > innerHeight) return closeMenu();
+  openMenuEl.style.left = `${Math.min(Math.max(8, r.left + dx), innerWidth - openMenuEl.offsetWidth - 8)}px`;
+  openMenuEl.style.top = `${Math.min(Math.max(8, r.top + dy), innerHeight - openMenuEl.offsetHeight - 8)}px`;
+}, true);
 
 // ───────── Modals ─────────
 

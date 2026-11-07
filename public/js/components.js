@@ -77,6 +77,61 @@ document.addEventListener('click', async (e) => {
   player.playList(list, 0, { shuffle: !!d.playArtist });
 }, true); // capture: must run before the router's link handler
 
+// ───────── Right-click menus for cards ─────────
+// Albums, artists and playlists get the same actions as their ⋯ menus. Anything else keeps
+// the browser's own right-click menu (copy text, open link in a new tab, ...).
+
+const fetchTracks = {
+  album: async (id) => (await api.get(`/albums/${encodeURIComponent(id)}`)).tracks,
+  artist: (id) => api.get(`/artists/${encodeURIComponent(id)}/tracks`),
+  playlist: async (id) => (await api.get(`/playlists/${id}`)).tracks,
+  smart: async (id) => (await api.get(`/smart-playlists/${id}`)).tracks,
+};
+
+export async function collectionMenu(at, kind, id, name) {
+  let list;
+  try { list = await fetchTracks[kind](id); } catch (err) { return toastError(err); }
+  if (!list?.length) return toast('Nothing to play here yet');
+  const { offlineItems } = await import('./offline.js');
+  const first = list[0];
+  openMenu(at, [
+    { head: name },
+    { icon: 'play', label: 'Play', action: () => player.playList(list, 0) },
+    { icon: 'shuffle', label: 'Shuffle', action: () => player.playList(list, 0, { shuffle: true }) },
+    { icon: 'playNext', label: 'Play next', action: () => player.playNext(list) },
+    { icon: 'addQueue', label: 'Add to queue', action: () => player.addToQueue(list) },
+    'sep',
+    { icon: 'list', label: 'Add to playlist…', action: (e) => playlistPicker(at instanceof Element ? at : e, list) },
+    ...(kind === 'album' ? [{ icon: 'radio', label: 'Start album radio', action: () => player.startRadio(`album:${id}`, name) },
+      { icon: 'mic', label: 'Go to artist', action: () => navigate(`/artist/${first.albumArtistId || first.artistId}`) }] : []),
+    ...(kind === 'artist' ? [{ icon: 'radio', label: 'Start artist radio', action: () => player.startRadio(`artist:${id}`, name) }] : []),
+    { icon: kind === 'artist' ? 'mic' : kind === 'album' ? 'disc' : 'listMusic', label: `Open ${kind === 'smart' ? 'playlist' : kind}`, action: () => navigate(`/${kind}/${encodeURIComponent(id)}`) },
+    ...(['album', 'playlist'].includes(kind) && (canShare() || canDownload()) ? ['sep'] : []),
+    ...(['album', 'playlist'].includes(kind) && canShare() ? [{ icon: 'share', label: `Share ${kind}…`, action: () => shareDialog(kind, id, name) }] : []),
+    ...(['album', 'playlist'].includes(kind) && canDownload() ? [{ icon: 'download', label: `Download ${kind}…`, action: () => downloadDialog(kind, id, name) }] : []),
+    ...(['album', 'playlist'].includes(kind) ? offlineItems(kind, id, name, list, first.cover) : []),
+  ]);
+}
+
+document.addEventListener('contextmenu', (e) => {
+  if (e.shiftKey) return; // Shift + right-click: the browser's menu, as an escape hatch
+  const card = e.target.closest('a.card[href]');
+  if (card) {
+    const m = card.getAttribute('href').match(/^\/(album|artist|playlist|smart)\/([^/?#]+)/);
+    if (!m) return;
+    e.preventDefault();
+    const name = card.querySelector('.card-title')?.textContent.trim() || '';
+    collectionMenu({ x: e.clientX, y: e.clientY }, m[1], decodeURIComponent(m[2]), name);
+    return;
+  }
+  // The song playing in the player bar / Now Playing screen.
+  if (e.target.closest('.pb-track, .np-art, .np-info') && player.current && !player.remote) {
+    if (e.target.closest('a[href]')) return;
+    e.preventDefault();
+    trackMenu(e, player.current);
+  }
+});
+
 // ───────── Track menus ─────────
 
 export function trackMenu(at, track, { tracks = [track], extra = [] } = {}) {
