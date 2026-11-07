@@ -770,21 +770,94 @@ select.input option { background: #16161d; color: #fff; }
 
 /* ───────── Equalizer ───────── */
 .modal.wide { width: min(640px, calc(100vw - 32px)); }
-.eq-top, .eq-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.eq-curve { display: block; width: 100%; height: 90px; margin: 12px 0 4px; border-radius: 12px; background: var(--glass); }
-.eq-bands { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 4px; padding: 6px 0 10px; transition: opacity .3s; overflow: hidden; }
-.eq.off .eq-bands, .eq.off .eq-curve { opacity: .4; }
-.eq-band { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
-.eq-band.preamp { border-right: 1px solid var(--border); padding-right: 4px; }
-.eq-val { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-2); }
-.eq-hz { font-size: 11px; font-weight: 650; color: var(--text-3); }
-/* Vertical slider: in vertical writing mode the slider's length is its inline size. */
-.eq-slider {
-  writing-mode: vertical-lr; direction: rtl; appearance: auto;
-  inline-size: 140px; block-size: 22px; width: 22px; height: 140px; min-width: 0; max-width: 100%;
-  margin: 0; padding: 0; accent-color: var(--c1); cursor: pointer;
+.eqx { --fader-h: 168px; display: block; }
+.eqx-head, .eqx-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.eqx-foot { margin-top: 6px; }
+
+/* Preset chips: one scrolling row. */
+.eqx-presets { display: flex; gap: 6px; overflow-x: auto; padding: 12px 2px 4px; margin: 0 -2px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.eqx-presets::-webkit-scrollbar { display: none; }
+.eqx-presets { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); padding-right: 32px; }
+.eqx-chip {
+  flex: none; scroll-snap-align: start; padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--text-2); background: rgba(255,255,255,.05); border: 1px solid var(--border); cursor: pointer;
+  transition: background .2s, color .2s, border-color .2s, transform .15s;
 }
-@media (max-width: 560px) { .eq-slider { inline-size: 110px; height: 110px; block-size: 18px; width: 18px; } .eq-hz, .eq-val { font-size: 10px; } }
+.eqx-chip:hover { color: var(--text); background: rgba(255,255,255,.09); }
+.eqx-chip:active { transform: scale(.96); }
+.eqx-chip.on { color: #fff; background: linear-gradient(135deg, var(--c1), var(--c2)); border-color: transparent; box-shadow: 0 4px 14px -6px var(--c1); }
+.eqx-chip.custom { cursor: default; }
+
+/* Response graph */
+.eqx-graph {
+  position: relative; height: 150px; margin: 10px 0 6px; border-radius: 14px; overflow: hidden;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(255,255,255,.05), transparent 70%), rgba(0,0,0,.22);
+  border: 1px solid var(--border);
+}
+.eqx-graph canvas { display: block; width: 100%; height: 100%; }
+
+/* Faders */
+.eqx-bands { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 2px; padding: 8px 0 4px; }
+.eqx-band { --pos: .5; --fill-top: 50%; --fill-h: 0%; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+.eqx-band.pre { position: relative; }
+.eqx-band.pre::after { content: ''; position: absolute; right: -1px; top: 24px; bottom: 24px; width: 1px; background: var(--border); }
+.eqx-val, .eqx-hz { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; transition: color .2s; }
+.eqx-val { color: var(--text-3); }
+.eqx-band.boost .eqx-val, .eqx-band.cut .eqx-val { color: var(--text); }
+.eqx-hz { color: var(--text-3); font-weight: 650; }
+.eqx-fader { position: relative; width: 100%; max-width: 34px; height: var(--fader-h); cursor: ns-resize; touch-action: none; border-radius: 10px; outline: none; }
+.eqx-track { position: absolute; left: 50%; top: 9px; bottom: 9px; width: 6px; transform: translateX(-50%); border-radius: 6px; background: rgba(255,255,255,.08); overflow: hidden; }
+.eqx-zero { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: rgba(255,255,255,.22); }
+.eqx-fill {
+  position: absolute; left: 0; right: 0; top: var(--fill-top); height: var(--fill-h); border-radius: 6px;
+  background: linear-gradient(180deg, var(--c2), var(--c1));
+  transition: top .18s cubic-bezier(.2,.8,.2,1), height .18s cubic-bezier(.2,.8,.2,1);
+}
+.eqx-band.cut .eqx-fill { background: linear-gradient(180deg, var(--c1), var(--c2)); }
+.eqx-thumb {
+  position: absolute; left: 50%; top: calc(9px + (var(--fader-h) - 18px) * var(--pos)); width: 22px; height: 22px; margin: -11px 0 0 -11px;
+  border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.45), 0 0 0 3px rgba(255,255,255,.06);
+  transition: top .18s cubic-bezier(.2,.8,.2,1), transform .15s, box-shadow .2s;
+}
+.eqx-thumb::after { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: linear-gradient(135deg, var(--c1), var(--c2)); transition: transform .2s; }
+.eqx-fader:hover .eqx-thumb { transform: scale(1.08); }
+.eqx-fader:focus-visible .eqx-thumb, .eqx-band.dragging .eqx-thumb { box-shadow: 0 2px 10px rgba(0,0,0,.45), 0 0 0 5px color-mix(in srgb, var(--c1) 35%, transparent), 0 0 18px var(--c1); transform: scale(1.12); }
+.eqx-band.dragging .eqx-thumb::after { transform: scale(1.25); }
+/* Follow the pointer exactly while dragging; glide otherwise. */
+.eqx-band.dragging .eqx-thumb, .eqx-band.dragging .eqx-fill { transition: transform .15s, box-shadow .2s; }
+.eqx-bubble {
+  position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translate(-50%, 4px) scale(.8); opacity: 0; pointer-events: none;
+  padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap;
+  background: linear-gradient(135deg, var(--c1), var(--c2)); box-shadow: 0 6px 16px -6px var(--c1);
+  transition: opacity .15s, transform .2s cubic-bezier(.2,1.4,.4,1);
+}
+.eqx-band.dragging .eqx-bubble, .eqx-fader:focus-visible .eqx-bubble { opacity: 1; transform: translate(-50%, 0) scale(1); }
+.eqx-band.dragging .eqx-val, .eqx-band:has(.eqx-fader:focus-visible) .eqx-val { opacity: 0; }
+.eqx-val { transition: color .2s, opacity .15s; }
+
+/* Switched off: everything dims and loses colour. */
+.eqx .eqx-graph, .eqx .eqx-bands { transition: opacity .3s, filter .3s; }
+.eqx.off .eqx-graph, .eqx.off .eqx-bands { opacity: .45; filter: saturate(0); }
+
+/* Opening: faders rise from 0 dB, one after another. */
+.eqx.intro .eqx-thumb { top: calc(9px + (var(--fader-h) - 18px) * .5); transition: none; }
+.eqx.intro .eqx-fill { top: 50%; height: 0; transition: none; }
+.eqx.settle .eqx-thumb, .eqx.settle .eqx-fill { transition-duration: .7s; }
+.eqx-band { animation: eqx-in .45s cubic-bezier(.2,.8,.2,1) backwards; }
+.eqx-band:nth-child(2) { animation-delay: .03s; } .eqx-band:nth-child(3) { animation-delay: .06s; } .eqx-band:nth-child(4) { animation-delay: .09s; }
+.eqx-band:nth-child(5) { animation-delay: .12s; } .eqx-band:nth-child(6) { animation-delay: .15s; } .eqx-band:nth-child(7) { animation-delay: .18s; }
+.eqx-band:nth-child(8) { animation-delay: .21s; } .eqx-band:nth-child(9) { animation-delay: .24s; } .eqx-band:nth-child(10) { animation-delay: .27s; }
+.eqx-band:nth-child(11) { animation-delay: .3s; }
+@keyframes eqx-in { from { opacity: 0; transform: translateY(10px); } }
+body.reduce-motion .eqx-band, body.reduce-motion .eqx-thumb, body.reduce-motion .eqx-fill, body.reduce-motion .eqx-bubble { animation: none; transition: none; }
+
+@media (max-width: 560px) {
+  .eqx { --fader-h: 132px; }
+  .eqx-graph { height: 116px; }
+  .eqx-val, .eqx-hz { font-size: 9.5px; }
+  .eqx-thumb { width: 18px; height: 18px; margin: -9px 0 0 -9px; }
+  .eqx-thumb::after { inset: 6px; }
+}
 
 /* ───────── File management & Inbox ───────── */
 .warn-box { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25); color: #fde68a; font-size: 13px; }
