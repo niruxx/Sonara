@@ -1,13 +1,13 @@
 // Sonara service worker: the app works offline, and songs saved for offline
 // play from the device. Saved songs live in the "sonara-offline" cache under
 // /offline/track/<id>; everything else is cached as it's used.
-const SHELL = 'sonara-shell-v2';
+const SHELL = 'sonara-shell-v3';
 const API = 'sonara-api-v1';
 const OFFLINE = 'sonara-offline';
 const COVERS = 'sonara-covers-v1';
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/', '/css/app.css', '/js/app.js', '/favicon.svg', '/manifest.webmanifest']).catch(() => {})));
+  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/', '/css/app.css', '/css/flat.css', '/js/app.js', '/favicon.svg', '/manifest.webmanifest']).catch(() => {})));
   self.skipWaiting();
 });
 

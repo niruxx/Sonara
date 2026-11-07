@@ -5,7 +5,7 @@ import { player } from '../player.js';
 import { state, refreshPlaylists, createPlaylist } from '../state.js';
 import { navigate } from '../router.js';
 import { toast, toastError, confirmDialog, formDialog, openMenu } from '../ui.js';
-import { albumCard, artistCard, playlistCard, trackList, emptyState, playlistArt, playlistPicker, releaseLabel, downloadDialog, shareDialog, canShare, canDownload } from '../components.js';
+import { albumCard, artistCard, playlistCard, trackList, emptyState, playlistArt, playlistPicker, releaseLabel, downloadDialog, shareDialog, canShare, canDownload, releaseCard } from '../components.js';
 import { setPalette } from '../theme.js';
 import { collectionFileItems } from '../fileops.js';
 import { smartEditor } from './smart.js';
@@ -117,6 +117,12 @@ export async function artistView({ params }) {
       ...collectionFileItems(tracks, { type: 'artist', id: a.id, name: a.name }),
     ]);
   });
+  // Albums by this artist that aren't in the library (MusicBrainz, when an admin turned it on).
+  api.get(`/artists/${params.id}/discography`).then((d) => {
+    if (!d?.enabled || !d.missing?.length || !v.isConnected) return;
+    v.append(el(html`<section class="section"><div class="section-head"><h2>${t('Not in your library')}</h2><span class="muted">${t('{owned} of {total} albums and EPs', { owned: d.owned, total: d.total })}</span></div>
+      <div class="carousel">${d.missing.map((g, i) => releaseCard(g, i))}</div></section>`));
+  }).catch(() => {});
   return v;
 }
 
@@ -127,14 +133,18 @@ const VIS_HELP = { private: 'only you', public: 'everyone here can listen', coll
 
 /** Pick an .m3u / .m3u8 / .xspf file and turn it into a playlist. */
 export function importPlaylistFile() {
-  const input = el('<input type="file" accept=".m3u,.m3u8,.xspf,audio/x-mpegurl,application/xspf+xml" hidden>');
+  const input = el('<input type="file" accept=".m3u,.m3u8,.xspf,.csv,.tsv,.txt,audio/x-mpegurl,application/xspf+xml,text/csv" hidden>');
   document.body.append(input);
   input.addEventListener('change', async () => {
     const f = input.files[0];
     input.remove();
     if (!f) return;
     try {
-      const res = await fetch(`/api/playlists/import?name=${encodeURIComponent(f.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'text/plain' }, body: await f.text() });
+      // Apple Music exports text as UTF-16: decode by its byte-order mark.
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const enc = bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le' : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : 'utf-8';
+      const text = new TextDecoder(enc).decode(bytes);
+      const res = await fetch(`/api/playlists/import?name=${encodeURIComponent(f.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: text });
       const r = await res.json();
       if (!res.ok) throw new Error(r.error);
       await refreshPlaylists();

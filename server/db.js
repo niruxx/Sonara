@@ -391,6 +391,70 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_radio_stations_user ON radio_stations(user_id);
   `,
+
+  // 8 — audio analysis, bookmarks, podcast chapters and transcripts, discographies,
+  // friend activity, webhooks.
+  `
+  -- One row per analysed track. source: 'server' (ffmpeg) or 'browser'.
+  CREATE TABLE track_analysis (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    file_mtime INTEGER NOT NULL,
+    version INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    peaks TEXT,
+    loudness REAL,        -- integrated loudness, LUFS
+    peak REAL,            -- sample peak, linear
+    album_gain REAL,      -- dB, from the whole album's loudness (NULL until every song of it is analysed)
+    album_peak REAL,
+    bpm REAL,
+    musical_key TEXT,
+    camelot TEXT,
+    energy REAL,
+    features TEXT,        -- JSON number vector ("sounds like")
+    error TEXT,
+    analyzed_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_analysis_bpm ON track_analysis(bpm);
+
+  CREATE TABLE bookmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    track_id INTEGER REFERENCES tracks(id) ON DELETE CASCADE,
+    episode_id INTEGER REFERENCES podcast_episodes(id) ON DELETE CASCADE,
+    position REAL NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_bookmarks_user ON bookmarks(user_id, track_id, episode_id);
+
+  -- Podcasting 2.0 / Podlove chapters and transcripts.
+  ALTER TABLE podcast_episodes ADD COLUMN chapters TEXT;          -- inline chapters (JSON)
+  ALTER TABLE podcast_episodes ADD COLUMN chapters_url TEXT;
+  ALTER TABLE podcast_episodes ADD COLUMN transcript_url TEXT;
+  ALTER TABLE podcast_episodes ADD COLUMN transcript_type TEXT;
+
+  -- Release groups per artist from MusicBrainz (missing albums, new releases).
+  CREATE TABLE artist_discography (
+    artist_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    mbid TEXT,
+    data TEXT,
+    fetched_at INTEGER NOT NULL
+  );
+
+  ALTER TABLE users ADD COLUMN share_activity INTEGER NOT NULL DEFAULT 0;
+
+  CREATE TABLE webhooks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    events TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_status INTEGER,
+    last_at INTEGER
+  );
+  `,
 ];
 
 function migrate() {

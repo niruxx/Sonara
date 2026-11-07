@@ -9,6 +9,52 @@ import { log } from './logger.js';
 
 export const PLAYLIST_EXT = new Set(['.m3u', '.m3u8', '.xspf']);
 
+// ───────── CSV / TSV (Spotify via Exportify, Apple Music, TuneMyMusic, Soundiiz…) ─────────
+
+function splitDelimited(text, sep) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else quoted = false; } else field += c;
+    } else if (c === '"' && field === '') quoted = true;
+    else if (c === sep) { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.some((f) => f.trim())) rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  row.push(field);
+  if (row.some((f) => f.trim())) rows.push(row);
+  return rows;
+}
+
+/** Spreadsheet exports: finds the title / artist / album / duration columns by their headings. */
+function parseDelimited(text) {
+  const first = text.split(/\r?\n/, 1)[0];
+  const count = (ch) => first.split(ch).length - 1;
+  const sep = count('\t') > count(',') ? '\t' : count(';') > count(',') ? ';' : ',';
+  const rows = splitDelimited(text, sep);
+  if (rows.length < 2) return null;
+  const head = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (...res) => { for (const re of res) { const i = head.findIndex((h) => re.test(h)); if (i >= 0) return i; } return -1; };
+  const title = col(/^track ?name$/, /^(song|track|title|name)$/, /track name|song name|^title/);
+  const artist = col(/^artist name\(s\)$/, /^artist ?name$/, /^artists?$/, /artist/);
+  if (title < 0 || artist < 0) return null;
+  const album = col(/^album ?name$/, /^album$/);
+  const dur = col(/^duration \(ms\)$/, /^time$/, /duration/);
+  const entries = rows.slice(1).map((r) => {
+    let duration = dur >= 0 ? Number(r[dur]) : undefined;
+    if (duration > 10000) duration /= 1000; // milliseconds
+    // Exportify lists several artists as "A,B": the first one is enough to match.
+    return { title: r[title]?.trim(), artist: r[artist]?.split(/[;,]\s*(?=\S)/)[0]?.trim(), album: album >= 0 ? r[album]?.trim() : undefined, duration: duration || undefined };
+  }).filter((e) => e.title);
+  return { name: null, entries };
+}
+
 const xmlEsc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 const xmlUnesc = (s) => String(s ?? '').replace(/&(lt|gt|quot|apos|amp|#\d+|#x[\da-f]+);/gi, (m, e) => {
   const map = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
@@ -19,6 +65,10 @@ const xmlUnesc = (s) => String(s ?? '').replace(/&(lt|gt|quot|apos|amp|#\d+|#x[\
 /** Parse playlist text into entries: { location?, title?, artist?, album?, duration? }. */
 export function parsePlaylist(text, name = '') {
   text = String(text).replace(/^﻿/, '');
+  if (/\.(csv|tsv|txt)$/i.test(name) || /^[^\n#]*(track ?name|title|name)[^\n]*[,\t;][^\n]*artist/i.test(text.slice(0, 500))) {
+    const r = parseDelimited(text);
+    if (r) return r;
+  }
   if (/<playlist[\s>]/i.test(text) || name.toLowerCase().endsWith('.xspf')) {
     const entries = [];
     for (const m of text.matchAll(/<track>([\s\S]*?)<\/track>/gi)) {
@@ -53,6 +103,35 @@ export function parsePlaylist(text, name = '') {
 }
 
 const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+/** A song title without what streaming services add: "(feat. X)", "- Remastered 2011", "[Live]"… */
+export const normSong = (s) => norm(String(s || '')
+  .replace(/\s[-–]\s.*\b(remaster(ed)?|version|edit|mix|live|mono|stereo|radio|single|demo|acoustic|bonus)\b.*$/i, '')
+  .replace(/[([](feat|ft|with)\.?\s[^)\]]*[)\]]/gi, '')
+  .replace(/\s(feat|ft)\.?\s.*$/i, ''));
+
+/**
+ * Finds library songs by artist + title, tolerant of featuring credits, remaster
+ * suffixes and accents. Build it once per import: it indexes the whole library.
+ * Returns a function (title, artist, album?, duration?) → track id or null.
+ */
+export function buildMatcher() {
+  const byTitle = new Map();
+  for (const r of q(`SELECT t.id, t.title, t.album, t.duration, t.artist, (SELECT group_concat(name, '|') FROM track_artists ta WHERE ta.track_id = t.id) AS artists FROM tracks t`).all()) {
+    const k = normSong(r.title);
+    if (!byTitle.has(k)) byTitle.set(k, []);
+    byTitle.get(k).push({ id: r.id, album: norm(r.album), duration: r.duration, artists: [r.artist, ...String(r.artists || '').split('|')].map(norm).filter(Boolean) });
+  }
+  return (title, artist, album = null, duration = null) => {
+    const cands = byTitle.get(normSong(title));
+    if (!cands) return null;
+    const a = norm(String(artist || '').split(/,|&| feat\.? | x /i)[0]);
+    const fits = cands.filter((c) => !a || c.artists.some((x) => x === a || x.includes(a) || a.includes(x)));
+    if (!fits.length) return !a && cands.length === 1 ? cands[0].id : null;
+    const al = norm(album);
+    const best = (al && fits.find((c) => c.album === al)) || (duration && fits.find((c) => Math.abs((c.duration || 0) - duration) < 4)) || fits[0];
+    return best.id;
+  };
+}
 
 function locationToPath(loc, baseDir) {
   if (!loc) return null;
@@ -74,6 +153,7 @@ function locationToPath(loc, baseDir) {
  * Returns { ids: [...], missing: [label...] }.
  */
 export function matchEntries(entries, { baseDir = null } = {}) {
+  let matcher = null;
   const ids = [];
   const missing = [];
   const byPath = q('SELECT id FROM tracks WHERE path = ?');
@@ -99,6 +179,7 @@ export function matchEntries(entries, { baseDir = null } = {}) {
       const best = cands.find((c) => a && norm(c.artist) === a) || cands.find((c) => a && norm(c.artist).includes(a))
         || (!a && cands.length === 1 ? cands[0] : null);
       id = best?.id ?? null;
+      if (!id) { matcher ||= buildMatcher(); id = matcher(e.title, e.artist, e.album, e.duration); }
     }
     if (id) ids.push(id);
     else missing.push(e.artist && e.title ? `${e.artist} - ${e.title}` : e.title || e.location || '?');

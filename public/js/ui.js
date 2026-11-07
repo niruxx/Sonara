@@ -42,11 +42,20 @@ export function openMenu(at, items) {
   closeMenu();
   const m = el(html`<div class="menu" role="menu"></div>`);
   menuOpener = at instanceof Element ? at : document.activeElement;
-  const scroll = items.length > 12 ? el('<div class="menu-scroll"></div>') : m;
-  if (scroll !== m) m.append(scroll);
+  // Items live in one scrolling list (the heading stays on top). Separators go in that list
+  // too, and leading, trailing or doubled ones (left by optional items) are dropped.
+  const scroll = el('<div class="menu-scroll"></div>');
+  m.append(scroll);
+  const clean = [];
+  for (const it of items.filter(Boolean)) {
+    if (it === 'sep' && (!clean.length || clean[clean.length - 1] === 'sep' || clean[clean.length - 1].head)) continue;
+    clean.push(it);
+  }
+  while (clean[clean.length - 1] === 'sep') clean.pop();
+  items = clean;
   for (const it of items) {
-    if (it === 'sep') { m.append(el('<div class="menu-sep"></div>')); continue; }
-    if (it.head) { m.insertBefore(el(html`<div class="menu-head" role="presentation">${it.head}</div>`), scroll === m ? null : scroll); if (!m.hasAttribute('aria-label')) m.setAttribute('aria-label', String(it.head).replace(/<[^>]+>/g, '')); continue; }
+    if (it === 'sep') { scroll.append(el('<div class="menu-sep" role="separator"></div>')); continue; }
+    if (it.head) { m.insertBefore(el(html`<div class="menu-head" role="presentation">${it.head}</div>`), scroll); if (!m.hasAttribute('aria-label')) m.setAttribute('aria-label', String(it.head).replace(/<[^>]+>/g, '')); continue; }
     const b = el(html`<button class="menu-item ${it.danger ? 'danger' : ''}" role="menuitem" tabindex="-1">${it.icon ? ic(it.icon) : ''}<span>${it.label}</span></button>`);
     b.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -182,7 +191,7 @@ export function formDialog({ title, message, fields, confirm = t('Save'), valida
 
 addEventListener('pointerdown', (e) => {
   const target = e.target.closest('.btn, .icon-btn, .play-fab, .pb-play, .card-play, .chip');
-  if (!target || document.body.classList.contains('reduce-motion')) return;
+  if (!target || document.body.classList.contains('reduce-motion') || document.body.classList.contains('flat')) return;
   const r = target.getBoundingClientRect();
   const size = Math.max(r.width, r.height);
   const rip = document.createElement('span');
@@ -200,7 +209,7 @@ addEventListener('pointermove', (e) => {
   const card = e.target.closest?.('.card, .np-art');
   if (tiltEl && tiltEl !== card) resetTilt(tiltEl);
   tiltEl = card;
-  if (!card || document.body.classList.contains('reduce-motion')) return;
+  if (!card || document.body.classList.contains('reduce-motion') || document.body.classList.contains('flat')) return;
   const r = card.getBoundingClientRect();
   const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
   const max = card.classList.contains('np-art') ? 8 : 10;

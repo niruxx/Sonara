@@ -13,6 +13,10 @@ import { setupJukebox } from './jukebox.js';
 import { setupDlna } from './dlna.js';
 import { scheduleBackups } from './backup.js';
 import { schedulePodcastRefresh } from './podcasts.js';
+import { scheduleAnalysis } from './analysis.js';
+import { scheduleDiscography } from './discography.js';
+import { setupSnapcast } from './snapcast.js';
+import { setupIntegrations } from './integrations.js';
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const config = getConfig();
@@ -74,6 +78,10 @@ const server = app.listen(config.port, config.host, () => {
   watchLibrary();
   scheduleBackups();
   schedulePodcastRefresh();
+  scheduleAnalysis();
+  scheduleDiscography();
+  setupSnapcast().catch((err) => log.warn('[snapcast]', err.message));
+  setupIntegrations();
   setupJukebox().catch((err) => log.warn('[jukebox]', err.message));
   setupDlna();
 });

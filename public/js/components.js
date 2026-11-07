@@ -53,6 +53,15 @@ export const genreTile = (g, i = 0) => {
   </a>`;
 };
 
+/** A MusicBrainz release you don't own (cover from the Cover Art Archive, falls back to a placeholder). */
+export const releaseCard = (g, i = 0, { artist = false } = {}) => html`
+  <a class="card release" href="${g.url}" target="_blank" rel="noopener noreferrer" style="--i:${i}" title="${t('Open on MusicBrainz')}">
+    <div class="card-art">${art(null, g.title)}<img src="${g.cover}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">
+      ${g.upcoming ? html`<span class="live-badge" style="background:#2563eb;box-shadow:none">${t('Soon')}</span>` : ''}</div>
+    <div class="card-title" title="${g.title}">${g.title}</div>
+    <div class="card-sub">${artist ? `${g.artist} · ` : ''}${g.date ? g.date.slice(0, 4) : ''}${g.type && g.type !== 'Album' ? ` · ${g.type}` : ''}</div>
+  </a>`;
+
 export const skeletonGrid = (n = 12) => html`<div class="grid">${Array.from({ length: n }, () => html`<div class="skeleton sk-card"></div>`)}</div>`;
 
 export const emptyState = (iconName, title, text, action = '') => html`
@@ -141,11 +150,13 @@ export function trackMenu(at, track, { tracks = [track], extra = [] } = {}) {
     { icon: 'play', label: multi ? plural(tracks.length, 'song').replace(/^/, `${t('Play')} `) : t('Play'), action: () => player.playList(tracks, 0) },
     { icon: 'playNext', label: t('Play next'), action: () => player.playNext(tracks) },
     { icon: 'addQueue', label: t('Add to queue'), action: () => player.addToQueue(tracks) },
-    ...(!multi ? [{ icon: 'radio', label: t('Start song radio'), action: () => player.startRadio(`track:${track.id}`, track.title) }] : []),
+    ...(!multi ? [{ icon: 'radio', label: t('Start song radio'), action: () => player.startRadio(`track:${track.id}`, track.title) },
+      { icon: 'waves', label: t('Sounds like this'), action: () => player.startRadio(`sound:${track.id}`, track.title) }] : []),
     'sep',
     { icon: 'list', label: t('Add to playlist…'), action: (e) => playlistPicker(at instanceof Element ? at : e, tracks) },
     ...(!multi ? [{ icon: track.favorite ? 'heartFill' : 'heart', label: track.favorite ? t('Remove from Favorites') : t('Add to Favorites'), action: () => toggleFavorite(track) }] : []),
     ...(!multi ? [{ icon: track.rating ? 'starFill' : 'star', label: track.rating ? `${t('Rating')}: ${'★'.repeat(track.rating)}` : t('Rate…'), action: (e) => ratingMenu(at instanceof Element ? at : e, track) }] : []),
+    ...(!multi && state.party && state.party.hostUserId !== state.user.id ? [{ icon: 'party', label: t('Request in the party'), action: async () => (await import('./party-requests.js')).requestInParty(track) }] : []),
     ...(!multi ? ['sep',
       { icon: 'disc', label: t('Go to album'), action: () => navigate(`/album/${track.albumId}`) },
       ...(track.artists?.length > 1
@@ -231,6 +242,10 @@ export async function trackDetails(track) {
     ['Size', t.size ? fmtBytes(t.size) : null],
     ['ReplayGain (track)', [fmtGain(t.rgTrackGain), t.rgTrackPeak ? `peak ${t.rgTrackPeak.toFixed(3)}` : null].filter(Boolean).join(', ') || null],
     ['ReplayGain (album)', [fmtGain(t.rgAlbumGain), t.rgAlbumPeak ? `peak ${t.rgAlbumPeak.toFixed(3)}` : null].filter(Boolean).join(', ') || null],
+    ['Tempo', t.bpm ? `${Math.round(t.bpm)} BPM` : null],
+    ['Key', t.musicalKey ? `${t.musicalKey}${t.camelot ? ` · ${t.camelot}` : ''}` : null],
+    ['Energy', t.energy != null ? `${Math.round(t.energy * 100)} / 100` : null],
+    ['Measured loudness', t.calcTrackGain != null ? `${(-18 - t.calcTrackGain).toFixed(1)} LUFS (gain ${fmtGain(t.calcTrackGain)})` : null],
     ['Your plays', String(t.playCount || 0)],
     ['Last played', t.lastPlayed ? new Date(t.lastPlayed).toLocaleString() : null],
     ['Added', new Date(t.addedAt).toLocaleDateString()],

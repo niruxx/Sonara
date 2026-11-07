@@ -23,6 +23,12 @@
 - 📱 **Works on phones.** The layout is responsive and the app can be installed as a PWA. Save albums and playlists **for offline** and they play without a connection (needs HTTPS or localhost).
 - 🎙️ **Podcasts.** Follow shows by RSS feed (or search the Apple Podcasts directory), and episodes resume where you stopped, on any device. Skip 15 s back or 30 s ahead, mark episodes played, download them to the server (by hand or automatically), and import or export your subscriptions as OPML.
 - 📻 **Internet radio.** Add Icecast and SHOUTcast streams (or `.pls` / `.m3u` links), or search [radio-browser.info](https://www.radio-browser.info). The song that's on air shows in the player.
+- 🌊 **Audio analysis.** A waveform seek bar, tempo and key (with Camelot codes), loudness levelling for files without ReplayGain tags, "Sounds like this" radio and daily mood mixes (Chill, Focus, Workout, Party, and one for this time of day). Runs on the server with ffmpeg, or in your browser as songs play.
+- 🎧 **Sound.** Headphone correction from the AutoEq database, night mode (gentle compression), mono, balance, and a karaoke mode that turns vocals down and shows big synced lyrics.
+- 🔖 **Bookmarks and chapters.** Press **B** to mark a moment in a long mix or an episode. Podcasts show their chapters and synced transcripts.
+- ⏰ **Wake-up alarm**, **smart shuffle** (no artist twice in a row) and visualizer styles from bars to Milkdrop presets.
+- 🔎 **Library tools.** Identify songs by their sound (AcoustID), see albums you're missing and new releases from your artists (MusicBrainz), import your history from Last.fm, ListenBrainz or Spotify, and import CSV playlists from Spotify or Apple Music.
+- 🏠 **Social and home.** Song requests and voting in listening parties, opt-in friend activity, multi-room playback with Snapcast, Home Assistant over MQTT, and signed webhooks.
 - ♿ **Accessible and translated.** Works with a keyboard and screen readers (skip link, focus handling in menus and dialogs, announced track changes) and follows your system's reduced-motion setting. The interface is available in English, Spanish, French and German.
 - 🪟 **Mini player** in an always-on-top window (press **P**), colour **themes** or your own accent colour, and a **high-contrast** mode. Admins can **change album covers** by uploading, pasting a link, or picking a picture from the album folder.
 
@@ -99,8 +105,12 @@ Some features use external programs. Sonara finds them on the `PATH`, and the re
 | --- | --- | --- |
 | [ffmpeg](https://ffmpeg.org) | Playing formats browsers can't (and cue sheets), lower streaming bitrates, converted downloads, editing tags, converting video to audio | `sudo apt install ffmpeg`, `brew install ffmpeg`, `winget install ffmpeg` |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Downloading from YouTube and other sites | `pip install yt-dlp`, `brew install yt-dlp`, `winget install yt-dlp` |
+| [fpcalc](https://acoustid.org/chromaprint) (Chromaprint) | "Identify song…" (also needs a free [AcoustID API key](https://acoustid.org/new-application) in Settings → Online services) | `sudo apt install libchromaprint-tools`, `brew install chromaprint` |
+| [Snapcast](https://github.com/badaix/snapcast) | Multi-room playback (Sonara streams to it with ffmpeg) | see the Snapcast docs |
 
-To use a copy that isn't on the `PATH`, set `"ffmpegPath"` or `"ytdlpPath"` in `data/config.json`.
+To use a copy that isn't on the `PATH`, set `"ffmpegPath"`, `"ytdlpPath"` or `"fpcalcPath"` in `data/config.json`.
+
+With ffmpeg, Sonara analyses the whole library in the background (one file at a time, at low priority; turn it off in Settings → Audio analysis). Without ffmpeg, songs are analysed in the browser the first time they're played (up to 20 minutes long).
 
 Changing files (editing tags, moving, organizing, importing from the Inbox) is **off by default**. Turn on **Settings → File management → Allow Sonara to change files** to use it. Downloads go to `data/downloads/` unless you choose another folder there. That folder must be outside your music folders.
 
@@ -201,6 +211,8 @@ npm run backup     # snapshot the database
 | `M` / `S` / `R` | Mute / shuffle / cycle repeat |
 | `F` | Full-screen Now Playing |
 | `Q` | Queue |
+| `B` | Bookmark the current position (songs and episodes) |
+| `V` / `K` | Next visualizer style / karaoke mode |
 | `/` | Search |
 
 In menus, the arrow keys move between items and `Esc` closes them. In the queue, `Enter` plays the focused song and `Delete` removes it.
@@ -212,6 +224,12 @@ In menus, the arrow keys move between items and `Esc` closes them. In the queue,
 - **Search** for podcasts (Apple Podcasts directory) and stations (radio-browser.info) is off by default; turn it on in Settings → Online services.
 - **Local addresses:** Sonara only fetches podcast feeds and radio streams on your local network (for example a home Icecast server) when an admin adds them. Other users can only add public addresses.
 - Podcasts and radio play in the browser you start them in; they aren't sent to other devices, Chromecast or listening parties.
+
+## Multi-room, Home Assistant and webhooks
+
+- **Snapcast:** add a TCP source to `snapserver.conf` (`source = tcp://0.0.0.0:4953?name=Sonara&mode=server`), then turn on Snapcast in **Settings → Multi-room and home automation** and enter the server's address. "All rooms (Snapcast)" appears in the devices menu.
+- **Home Assistant:** enter your broker as `mqtt://user:password@host:1883` (or `mqtts://`). For everyone who shares their listening activity (Settings → Account), Sonara publishes `sonara/<user>/now_playing` and `sonara/<user>/state`, announces a sensor and play/pause, next and previous buttons through MQTT discovery, and listens on `sonara/<user>/command` (`toggle`, `play`, `pause`, `next`, `prev`).
+- **Webhooks** (Settings → Webhooks): Sonara POSTs `{ event, at, user, playing, position, track }` for `track.started`, `playback.paused` and `playback.resumed`. Check `X-Sonara-Signature: sha256=<hex>`, an HMAC-SHA256 of the raw body with the webhook's secret. Only admins can point webhooks at local-network addresses.
 
 ## Translations
 

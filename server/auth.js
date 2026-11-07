@@ -75,6 +75,7 @@ export function publicUser(u) {
     id: u.id, username: u.username, isAdmin: !!u.is_admin, createdAt: u.created_at, maxBitrate: u.max_bitrate || 0,
     permissions: permissionsOf(u), libraryDirs: libraryDirsOf({ ...u, is_admin: 0 }),
     twoFactor: !!u.totp_secret, authSource: u.auth_source || 'local', hasPassword: String(u.password_hash || '').startsWith('scrypt$'),
+    shareActivity: !!u.share_activity,
   };
 }
 

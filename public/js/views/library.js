@@ -5,7 +5,7 @@ import { player } from '../player.js';
 import { state } from '../state.js';
 import { navigate } from '../router.js';
 import { organizeDialog } from '../fileops.js';
-import { albumCard, artistCard, genreTile, trackList, emptyState, skeletonGrid } from '../components.js';
+import { albumCard, artistCard, genreTile, trackList, emptyState, skeletonGrid, releaseCard } from '../components.js';
 import { t, locale } from '../i18n.js';
 
 /** Calls load() whenever the sentinel scrolls into view; stops when load returns false. */
@@ -31,7 +31,8 @@ const noLibrary = () => emptyState('library', t('Your library is empty'),
 export async function homeView() {
   const v = el(html`<div><h1 class="page-title"><span class="greeting">${greeting()}</span>${state.user ? `, ${state.user.username}` : ''}</h1>
     <p class="page-sub">${t("Here's what's spinning in your library.")}</p><div class="home-body">${skeletonGrid(6)}</div></div>`);
-  const [home, stats] = await Promise.all([api.get('/home'), api.get('/stats')]);
+  const [home, stats, mixes, fresh, activity] = await Promise.all([api.get('/home'), api.get('/stats'), api.get('/mixes').catch(() => []),
+    api.get('/discography/new').catch(() => ({ releases: [] })), api.get('/activity').catch(() => ({ friends: [] }))]);
   const body = v.querySelector('.home-body');
   if (!stats.tracks) { body.replaceChildren(el(noLibrary())); return v; }
 
@@ -49,9 +50,24 @@ export async function homeView() {
         <div class="card-title" title="${a.name}">${a.name}</div>
         <div class="card-sub">${t('Song {n} of {total}', { n: a.resumeIndex + 1, total: a.trackCount })} · ${a.artist}</div>
       </a>`)}</div>`) : ''}
+    ${activity.friends?.length ? section('Friend activity', null, html`<div class="friends">${activity.friends.slice(0, 8).map((f, i) => html`
+      <button class="friend" data-friend="${i}" style="--i:${i}" aria-label="${t('Play {title} by {artist}', { title: f.track.title, artist: f.track.artist })}">
+        <span class="avatar">${f.user[0]}</span>
+        <span class="tl-cover">${art(f.track.cover, f.track.album, 'disc', 80)}</span>
+        <span class="grow"><b>${f.user}</b> <span class="muted">${f.playing ? html`<span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span> ${t('listening now')}` : ago(f.at)}</span><br>
+          <span class="friend-track">${f.track.title} · ${f.track.artist}</span></span>
+      </button>`)}</div>`) : ''}
+    ${mixes.length ? section('Mixes for you', null, html`<div class="carousel">${mixes.map((m, i) => html`
+      <a class="card" href="/mix/${m.id}" style="--i:${i}">
+        <div class="card-art">${m.covers.length >= 4 ? html`<div class="mix-mosaic">${m.covers.slice(0, 4).map((c) => art(c))}</div>` : art(m.covers[0], m.name, 'playlist')}
+          <span class="mix-label">${t(m.name)}</span>
+          <button class="card-play" data-play-mix="${m.id}" aria-label="${t('Play {title}', { title: t(m.name) })}">${ic('play')}</button></div>
+        <div class="card-title">${t(m.name)}</div><div class="card-sub">${t(m.description)}</div>
+      </a>`)}</div>`) : ''}
     ${home.recentlyPlayed.length ? section('Jump back in', null, html`<div class="recent-list"></div>`) : ''}
     ${home.onThisDay?.length ? section(`On this day`, null, html`<p class="muted section-note">${t('What you were listening to on {date} in years past.', { date: new Date().toLocaleDateString(locale(), { month: 'long', day: 'numeric' }) })}</p><div class="otd-list"></div>`) : ''}
     ${home.recentAlbums?.length ? section('Recently played albums', '/albums?sort=lastPlayed', html`<div class="carousel">${home.recentAlbums.map(albumCard)}</div>`) : ''}
+    ${fresh.releases?.length ? section('New releases from your artists', null, html`<div class="carousel">${fresh.releases.map((g, i) => releaseCard(g, i, { artist: true }))}</div>`) : ''}
     ${section('Recently added', '/albums?sort=recent', html`<div class="carousel">${home.recentlyAdded.map(albumCard)}</div>`)}
     ${home.topArtists.length ? section('Your top artists', '/artists', html`<div class="carousel">${home.topArtists.map((a, i) => artistCard({ ...a, albumCount: null }, i))}</div>`) : ''}
     ${home.mostPlayed.length ? section('On repeat', null, html`<div class="most-list"></div>`) : ''}
@@ -63,6 +79,20 @@ export async function homeView() {
   if (home.onThisDay?.length) body.querySelector('.otd-list').replaceWith(trackList(home.onThisDay.slice(0, 6), { head: false }).el);
   if (home.rediscover?.length) body.querySelector('.rediscover-list').replaceWith(trackList(home.rediscover.slice(0, 6), { head: false }).el);
   body.addEventListener('click', async (e) => {
+    const fr = e.target.closest('[data-friend]');
+    if (fr) {
+      const [tr] = await api.post('/tracks/lookup', { ids: [activity.friends[Number(fr.dataset.friend)].track.id] });
+      if (tr) player.playList([tr], 0);
+      return;
+    }
+    const mix = e.target.closest('[data-play-mix]');
+    if (mix) {
+      e.preventDefault();
+      e.stopPropagation();
+      const list = await api.get(`/mixes/${mix.dataset.playMix}`);
+      if (list.length) player.playList(list, 0);
+      return;
+    }
     const b = e.target.closest('[data-resume]');
     if (!b) return;
     e.preventDefault();
@@ -73,6 +103,36 @@ export async function homeView() {
   body.querySelector('[data-shuffle-all]').addEventListener('click', async () => {
     player.playList(await api.get('/tracks/random', { limit: 300 }), 0);
   });
+  return v;
+}
+
+/** "5 min ago", "yesterday"… */
+function ago(ts) {
+  const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: 'auto' });
+  const s = (ts - Date.now()) / 1000;
+  for (const [unit, n] of [['day', 86400], ['hour', 3600], ['minute', 60]]) if (Math.abs(s) >= n) return rtf.format(Math.round(s / n), unit);
+  return rtf.format(0, 'minute');
+}
+
+// ───────── Mixes ─────────
+
+export async function mixView({ params }) {
+  const [list, mixes] = await Promise.all([api.get(`/mixes/${encodeURIComponent(params.id)}`), api.get('/mixes').catch(() => [])]);
+  const m = mixes.find((x) => x.id === params.id) || { name: t('Mix'), description: '' };
+  const v = el(html`<div>
+    <div class="eyebrow" style="margin-top:12px">${t('Mix')}</div>
+    <h1 class="page-title">${t(m.name)}</h1>
+    <p class="page-sub">${t(m.description)} · ${plural(list.length, 'song')} · ${t('New picks every day.')}</p>
+    <div class="actions">
+      <button class="play-fab" data-play aria-label="${t('Play')}">${ic('play')}</button>
+      <button class="icon-btn lg" data-shuffle aria-label="${t('Shuffle')}">${ic('shuffle')}</button>
+    </div>
+    <div class="tracks"></div>
+  </div>`);
+  if (list.length) v.querySelector('.tracks').replaceWith(trackList(list).el);
+  else v.querySelector('.tracks').replaceWith(el(emptyState('waves', t('Nothing here yet'), t('Mixes fill up as Sonara analyses your library.'))));
+  v.querySelector('[data-play]').addEventListener('click', () => list.length && player.playList(list, 0));
+  v.querySelector('[data-shuffle]').addEventListener('click', () => list.length && player.playList(list, 0, { shuffle: true }));
   return v;
 }
 

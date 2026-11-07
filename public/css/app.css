@@ -567,7 +567,7 @@ body:not(.playing) .eq i { animation-play-state: paused; }
 .menu-item.danger:hover { background: rgba(239,68,68,.18); color: #fca5a5; }
 .menu-sep { height: 1px; background: var(--border); margin: 5px 8px; }
 .menu-head { padding: 8px 12px 6px; font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); }
-.menu-scroll { max-height: min(240px, 50vh); overflow-y: auto; overscroll-behavior: contain; }
+.menu-scroll { max-height: min(560px, calc(100vh - 120px)); overflow-y: auto; overscroll-behavior: contain; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 20px; background: rgba(4,3,8,.55); backdrop-filter: blur(10px); animation: fadeIn .3s var(--ease); }
 .modal-backdrop.out { animation: fadeOut .2s ease-in forwards; }
@@ -1155,3 +1155,61 @@ h3.q-label { margin: 0; }
   .ep-cover { width: 48px; height: 48px; }
   .ep-progress { display: none; }
 }
+
+/* ───────── Stage 8: waveform seek bar ───────── */
+.seek-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; height: 18px; }
+.seek-wrap .range { position: relative; z-index: 1; }
+.seek-wrap .wave { position: absolute; left: 0; right: 0; top: 50%; width: 100%; height: 26px; transform: translateY(-50%); opacity: 0; transition: opacity .4s; pointer-events: none; }
+.seek-wrap.has-wave .wave { opacity: 1; }
+.seek-wrap.has-wave { height: 26px; }
+.seek-wrap.has-wave .range::-webkit-slider-runnable-track { background: transparent !important; box-shadow: none !important; }
+.seek-wrap.has-wave .range::-moz-range-track, .seek-wrap.has-wave .range::-moz-range-progress { background: transparent !important; }
+.np-progress .seek-wrap.has-wave { height: 44px; }
+.np-progress .seek-wrap .wave { height: 44px; }
+.live .seek-wrap .wave { display: none; }
+.mix-mosaic { display: grid; grid-template-columns: 1fr 1fr; width: 100%; height: 100%; }
+.mix-mosaic img, .mix-mosaic .ph { width: 100%; height: 100%; object-fit: cover; }
+.mix-label { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 12px 10px; font-weight: 800; font-size: 18px; letter-spacing: -0.02em; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.7)); pointer-events: none; }
+
+/* ───────── Stage 8: sound settings ───────── */
+.sound-editor { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.sound-editor h4 { display: flex; align-items: center; gap: 8px; margin: 18px 0 4px; font-size: 15px; }
+.sound-editor h4 svg { width: 18px; height: 18px; color: var(--accent); }
+.sound-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 6px 18px; align-items: center; }
+.sound-grid .check > span:last-child { display: flex; flex-direction: column; }
+.sound-grid small { font-size: 12px; font-weight: 450; }
+.balance { display: flex; align-items: center; gap: 8px; }
+.balance .range { flex: 1; }
+.hp-search { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.hp-search .find-list { max-height: 260px; }
+.modal h3 { display: flex; align-items: center; gap: 10px; }
+.modal h3 > svg { width: 22px; height: 22px; flex: none; color: var(--accent); }
+
+/* ───────── Stage 8: chapter and bookmark ticks, transcripts ───────── */
+.seek-wrap .ticks { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.seek-wrap .ticks i { position: absolute; top: 50%; width: 2px; height: 10px; margin-left: -1px; transform: translateY(-50%); border-radius: 1px; background: var(--text-2); opacity: .8; }
+.seek-wrap .ticks i.bookmark { width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #fbbf24; top: 0; transform: none; }
+.lyr-lines.transcript .lyr-line { font-size: clamp(17px, 2.1vw, 22px); }
+.lyr-who { margin: 18px 0 2px; font-size: 12px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+
+/* ───────── Stage 8: friends, releases, party requests ───────── */
+.friends { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.friend { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: var(--glass); text-align: left; min-width: 0; transition: background .15s; }
+.friend:hover { background: var(--glass-2); }
+.friend .avatar { width: 30px; height: 30px; font-size: 12px; }
+.friend .grow { flex: 1; min-width: 0; }
+.friend-track { display: block; font-size: 13px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.friend .eq { height: 10px; vertical-align: -1px; }
+.card.release .card-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.req .tl-cover { width: 40px; height: 40px; }
+.req .btn.sm svg { width: 15px; height: 15px; }
+[data-party-requests].on { color: var(--accent); }
+
+/* ───────── Stage 8: visualizer styles and karaoke ───────── */
+.np-milk { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; opacity: .9; }
+.np.vis-milkdrop .np-canvas, .np.vis-milkdrop .np-bg { display: none; }
+.np.vis-milkdrop .np-art { opacity: .92; }
+.np.karaoke .np-art { display: none; }
+.np.karaoke.show-lyrics .np-stage { grid-template-columns: minmax(0, 1fr); }
+.np.karaoke.show-lyrics .np-lyrics { width: min(900px, 92vw); justify-self: center; height: min(62vh, 100%); text-align: center; }
+.np.karaoke .lyr-line { font-size: clamp(26px, 4vw, 48px); font-weight: 800; transform-origin: center; }

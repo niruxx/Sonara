@@ -1,7 +1,7 @@
 // Sonara web client — entry point.
 import { api, setUnauthorizedHandler } from './api.js';
 import { html, ic, el, art, fmtTime } from './util.js';
-import { player, eq } from './player.js';
+import { player, eq, sound } from './player.js';
 import { openEqualizer } from './eq.js';
 import { attachLyrics } from './lyrics.js';
 let lyricsPane = null;
@@ -9,9 +9,9 @@ import { state, bus, refreshPlaylists, toggleFavorite, createPlaylist } from './
 import { route, match, onRoute, navigate, start as startRouter } from './router.js';
 import { dragSort, toastError, toast, openMenu } from './ui.js';
 import { trackMenu, emptyState, artistLinks } from './components.js';
-import { attachSpectrum, startVisualizer } from './visualizer.js';
+import { attachSpectrum, startVisualizer, VIS_STYLES, visStyle, startMilkdrop, stopMilkdrop, nextPreset } from './visualizer.js';
 import { clearPagePalette, settlePalette, setPlayingCover } from './theme.js';
-import { homeView, albumsView, artistsView, songsView, genresView, genreView } from './views/library.js';
+import { homeView, albumsView, artistsView, songsView, genresView, genreView, mixView } from './views/library.js';
 import { albumView, artistView, playlistsView, playlistView, favoritesView, searchView, searchInput } from './views/detail.js';
 import { settingsView, applyPrefs } from './views/settings.js';
 import { authView } from './views/auth.js';
@@ -29,6 +29,11 @@ import { radioView, stationMenu } from './views/radio.js';
 import { isLibrary, isEpisode, isStation, subtitle, sourceLabel } from './media.js';
 import { t, loadLocale } from './i18n.js';
 import { announce } from './a11y.js';
+import { getAnalysis, forgetAnalysis, drawWave } from './analysis.js';
+import { addBookmark, markMenuItems, markTicks } from './marks.js';
+import { alarmDialog, alarmLabel, startAlarms } from './alarm.js';
+import { requestsDialog } from './party-requests.js';
+import { prefs } from './util.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const rootEl = document.getElementById('root');
@@ -54,6 +59,7 @@ route('/party/:id', partyView);
 route('/podcasts', podcastsView);
 route('/podcast/:id', podcastView);
 route('/radio', radioView);
+route('/mix/:id', mixView);
 
 const NAV = [
   ['/', 'home', 'Home'],
@@ -110,6 +116,7 @@ function startApp(user) {
   startRouter();
   player.restore(user);
   startConnect();
+  startAlarms();
 }
 
 // ───────────────────────── Layout ─────────────────────────
@@ -156,7 +163,7 @@ function shell() {
 
     <footer class="playerbar" aria-label="${t('Player')}">
       <div class="pb-remote" hidden>${ic('cast')}<span data-remote-label></span><button class="btn sm ghost" data-play-here>${t('Play here')}</button><button class="icon-btn sm" data-leave-remote aria-label="${t('Stop controlling')}" title="${t('Stop controlling')}">${ic('x')}</button></div>
-      <div class="pb-party" hidden>${ic('party')}<span data-party-label></span><button class="btn sm ghost" data-party-copy>${t('Copy link')}</button><button class="btn sm ghost" data-party-leave>${t('Leave')}</button></div>
+      <div class="pb-party" hidden>${ic('party')}<span data-party-label></span><button class="btn sm ghost" data-party-requests>${t('Requests')}</button><button class="btn sm ghost" data-party-copy>${t('Copy link')}</button><button class="btn sm ghost" data-party-leave>${t('Leave')}</button></div>
       <div class="pb-track">
         <button class="pb-cover" data-open-np title="${t('Now playing')}" aria-label="${t('Open Now Playing')}">${art(null, '')}<div class="expand">${ic('maximize')}</div></button>
         <div class="pb-meta"><div class="pb-title">${t('Nothing playing')}</div><div class="pb-artist">${t('Pick something you love')}</div></div>
@@ -217,6 +224,8 @@ const nowPlaying = () => html`<section class="np paused" role="dialog" aria-moda
     <button class="icon-btn" data-close-np aria-label="${t('Close Now Playing')}">${ic('chevronDown')}</button>
     <div class="label"><span data-np-source>${t('Playing from your library')}</span><b data-np-album></b></div>
     <div class="row-gap">
+      <button class="icon-btn" data-np-vis aria-label="${t('Visualizer style')}" title="${t('Visualizer style')} (V)">${ic('activity')}</button>
+      <button class="icon-btn" data-np-karaoke aria-label="${t('Karaoke')}" aria-pressed="false" title="${t('Karaoke: vocals down, big lyrics')} (K)">${ic('party')}</button>
       <button class="icon-btn" data-np-lyrics aria-label="${t('Lyrics')}" title="${t('Lyrics')} (L)">${ic('mic')}</button>
       <button class="icon-btn" data-np-more aria-label="${t('More options')}">${ic('more')}</button>
     </div>
@@ -349,6 +358,53 @@ function bindTransport(scope) {
   const cur = scope.querySelector('[data-cur]');
   const dur = scope.querySelector('[data-dur]');
   let dragging = false;
+
+  // Waveform drawn behind the seek bar (once the song has been analysed).
+  const wrap = document.createElement('div');
+  wrap.className = 'seek-wrap';
+  seek.before(wrap);
+  const wave = document.createElement('canvas');
+  wave.className = 'wave';
+  wave.setAttribute('aria-hidden', 'true');
+  const ticks = document.createElement('div');
+  ticks.className = 'ticks';
+  ticks.setAttribute('aria-hidden', 'true');
+  wrap.append(wave, ticks, seek);
+  const loadTicks = async (tr) => {
+    ticks.replaceChildren();
+    if (!tr || tr.live) return;
+    const list = await markTicks(tr).catch(() => []);
+    if (player.current !== tr) return;
+    ticks.innerHTML = String(html`${list.map((m) => html`<i class="${m.kind}" style="left:${(m.at * 100).toFixed(3)}%" title="${m.title}"></i>`)}`);
+  };
+  player.on('marks', (id) => { if (player.current?.id === id) loadTicks(player.current); });
+  let peaks = null;
+  let drawnAt = -1;
+  const paint = (force = false) => {
+    if (!peaks) return;
+    const p = player.duration ? Math.min(1, player.time / player.duration) : 0;
+    const px = Math.round(p * wave.clientWidth);
+    if (!force && px === drawnAt) return;
+    drawnAt = px;
+    const css = getComputedStyle(document.body);
+    drawWave(wave, peaks, p, { played: css.getPropertyValue('--accent').trim() || '#fff', rest: 'rgba(255,255,255,.22)' });
+  };
+  const loadWave = async (tr) => {
+    peaks = null;
+    wrap.classList.remove('has-wave');
+    const ctx = wave.getContext('2d');
+    ctx.clearRect(0, 0, wave.width, wave.height);
+    if (!tr || typeof tr.id !== 'number' || prefs.get('waveform', true) === false) return;
+    const a = await getAnalysis(tr);
+    if (player.current !== tr || !a?.peaks) return;
+    peaks = a.peaks;
+    wrap.classList.add('has-wave');
+    paint(true);
+  };
+  player.on('track', (tr) => { if (wrap.dataset.id !== String(tr?.id)) { wrap.dataset.id = tr?.id ?? ''; loadWave(tr); loadTicks(tr); } });
+  player.on('analysis', (id) => { if (player.current?.id === id) { wrap.dataset.id = ''; loadWave(player.current); } });
+  addEventListener('resize', () => paint(true));
+  new MutationObserver(() => paint(true)).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   seek.addEventListener('input', () => {
     dragging = true;
     const t = (seek.value / seek.max) * player.duration;
@@ -361,6 +417,7 @@ function bindTransport(scope) {
   });
   player.on('time', (now, d) => {
     if (dragging) return;
+    paint();
     const live = !!player.current?.live;
     setRange(seek, live ? 0 : now, live ? 0 : d);
     cur.textContent = fmtTime(now);
@@ -389,9 +446,33 @@ function bindTransport(scope) {
   });
 }
 
+/** Songs without an analysis get one: by the server (ffmpeg), or in this browser after a few seconds of play. */
+function bindAnalysis() {
+  let timer = null;
+  player.on('track', (tr) => {
+    clearTimeout(timer);
+    if (!isLibrary(tr)) return;
+    timer = setTimeout(async () => {
+      if (player.current !== tr) return;
+      forgetAnalysis(tr.id);
+      const before = await getAnalysis(tr);
+      if (before?.analyzed) return;
+      if (before?.pending) {
+        // The server is on it; check back shortly.
+        setTimeout(async () => { forgetAnalysis(tr.id); const a = await getAnalysis(tr); if (a?.analyzed) player.emit('analysis', tr.id); }, 20000);
+        return;
+      }
+      forgetAnalysis(tr.id);
+      const a = await getAnalysis(tr, { analyse: true });
+      if (a?.analyzed) player.emit('analysis', tr.id);
+    }, 6000);
+  });
+}
+
 function bindPlayerBar() {
   const bar = $('.playerbar');
   bindTransport(bar);
+  bindAnalysis();
 
   const vol = $('[data-vol]', bar);
   const mute = $('[data-mute]', bar);
@@ -434,7 +515,7 @@ function bindPlayerBar() {
 
   // Equalizer
   const eqBtn = $('[data-eq]', bar);
-  const drawEq = () => eqBtn.classList.toggle('on', !!eq.enabled);
+  const drawEq = () => eqBtn.classList.toggle('on', !!eq.enabled || sound.active);
   drawEq();
   eqBtn.addEventListener('click', async () => { await openEqualizer(); drawEq(); });
 
@@ -458,6 +539,8 @@ function bindPlayerBar() {
     ...[5, 15, 30, 45, 60, 90].map((m) => ({ icon: 'clock', label: t('{n} minutes', { n: m }), action: () => { player.setSleep(m); toast(t('Sleep timer set for {n} minutes', { n: m })); } })),
     { icon: 'music', label: t('End of this song'), action: () => { player.setSleep('track'); toast(t('Playback will stop after this song')); } },
     ...(player.sleep ? ['sep', { icon: 'x', label: t('Turn off timer'), action: () => { player.setSleep(null); toast(t('Sleep timer off')); } }] : []),
+    'sep',
+    { icon: 'clock', label: html`${t('Wake-up alarm…')}${alarmLabel() ? html`<small class="menu-sub">${alarmLabel()}</small>` : ''}`, action: () => alarmDialog() },
   ]));
 
   let lastAnnounced = null;
@@ -497,7 +580,7 @@ function bindPlayerBar() {
 
 // ───────────────────────── Devices (Connect, casting, parties) ─────────────────────────
 
-const KIND_ICON = { browser: 'laptop', jukebox: 'speaker', dlna: 'speaker', cast: 'cast' };
+const KIND_ICON = { browser: 'laptop', jukebox: 'speaker', dlna: 'speaker', cast: 'cast', snapcast: 'speaker' };
 
 function deviceLine(d) {
   const s = d.state;
@@ -571,7 +654,12 @@ function bindDevices() {
 
   const pbar = $('.pb-party', bar);
   connect.on('party', (p) => {
+    state.party = p;
     pbar.hidden = !p;
+    const reqBtn = $('[data-party-requests]', pbar);
+    const nReq = p?.requests?.length || 0;
+    reqBtn.textContent = nReq ? `${t('Requests')} (${nReq})` : t('Requests');
+    reqBtn.classList.toggle('on', nReq > 0);
     document.body.classList.toggle('in-party', !!p);
     if (!p) return;
     const host = p.hostClient === clientId;
@@ -582,6 +670,7 @@ function bindDevices() {
     $('[data-party-copy]', pbar).hidden = !host;
     $('[data-party-leave]', pbar).textContent = host ? 'End' : 'Leave';
   });
+  $('[data-party-requests]', pbar).addEventListener('click', () => requestsDialog());
   $('[data-party-copy]', pbar).addEventListener('click', () => connect.party && copyText(partyUrl(connect.party)));
   $('[data-party-leave]', pbar).addEventListener('click', () => leaveParty({ end: connect.party?.hostClient === clientId }));
 }
@@ -686,14 +775,19 @@ function bindNowPlaying() {
   $('[data-close-np]', np).addEventListener('click', () => toggleNowPlaying(false));
   $('[data-np-fav]', np).addEventListener('click', () => player.current && toggleFavorite(player.current));
   np.inert = true;
-  $('[data-np-more]', np).addEventListener('click', (e) => {
+  bindVisualizerStyle(np);
+  bindKaraoke(np);
+  $('[data-np-more]', np).addEventListener('click', async (e) => {
     const tr = player.current;
+    const at = e.currentTarget;
     if (!tr) return;
-    if (isLibrary(tr)) return trackMenu(e.currentTarget, tr);
+    const marks = player.remote ? [] : await markMenuItems().catch(() => []);
+    if (isLibrary(tr)) return trackMenu(at, tr, { extra: marks });
     if (isEpisode(tr)) {
-      return openMenu(e.currentTarget, [
+      return openMenu(at, [
         { icon: 'podcast', label: t('Go to podcast'), action: () => { toggleNowPlaying(false); navigate(`/podcast/${tr.podcastId}`); } },
         { icon: 'checkCircle', label: t('Mark as played'), action: () => { player.markPlayed(); player.next(); } },
+        ...(marks.length ? ['sep', ...marks] : []),
       ]);
     }
     openMenu(e.currentTarget, [
@@ -732,6 +826,60 @@ function bindNowPlaying() {
   player.on('state', (playing) => np.classList.toggle('paused', !playing));
 }
 
+// ───────────────────────── Visualizer styles and karaoke ─────────────────────────
+
+const VIS_LABEL = { bars: 'Bars', wave: 'Wave', radial: 'Radial', milkdrop: 'Milkdrop' };
+
+async function setVisStyle(np, style) {
+  if (style === 'milkdrop' && !prefs.get('milkdropOk', false)) {
+    const { confirmDialog } = await import('./ui.js');
+    const ok = await confirmDialog({ title: t('Load Milkdrop visualizer?'), message: t('Milkdrop presets need the butterchurn library (about 850 KB), downloaded from cdn.jsdelivr.net. Nothing about your music is sent.'), confirm: t('Load') });
+    if (!ok) return;
+    prefs.set('milkdropOk', true);
+  }
+  prefs.set('visStyle', style);
+  np.classList.toggle('vis-milkdrop', style === 'milkdrop');
+  if (style === 'milkdrop') {
+    try { await startMilkdrop($('.np-stage', np).parentElement); } catch (err) { toast(err.message, { type: 'error' }); prefs.set('visStyle', 'bars'); np.classList.remove('vis-milkdrop'); return; }
+  } else stopMilkdrop();
+  toast(t('Visualizer: {name}', { name: t(VIS_LABEL[style]) }), { ms: 1200 });
+}
+
+function bindVisualizerStyle(np) {
+  const btn = $('[data-np-vis]', np);
+  const next = () => setVisStyle(np, VIS_STYLES[(VIS_STYLES.indexOf(visStyle()) + 1) % VIS_STYLES.length]);
+  btn.addEventListener('click', next);
+  btn.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openMenu(e, [{ head: t('Visualizer style') }, ...VIS_STYLES.map((s) => ({ icon: s === visStyle() ? 'check' : null, label: t(VIS_LABEL[s]), action: () => setVisStyle(np, s) })),
+      ...(visStyle() === 'milkdrop' ? ['sep', { icon: 'refresh', label: t('Next preset'), action: () => nextPreset(1) }] : [])]);
+  });
+  np.addEventListener('dblclick', (e) => { if (visStyle() === 'milkdrop' && !e.target.closest('button, input, a, .np-lyrics')) nextPreset(1); });
+  // Milkdrop needs the audio graph; start it when Now Playing opens.
+  new MutationObserver(() => {
+    if (np.classList.contains('open') && visStyle() === 'milkdrop' && prefs.get('milkdropOk', false) && player.analyser) startMilkdrop($('.np-stage', np).parentElement).catch(() => {});
+    if (!np.classList.contains('open')) stopMilkdrop();
+  }).observe(np, { attributes: true, attributeFilter: ['class'] });
+  np.classList.toggle('vis-milkdrop', visStyle() === 'milkdrop');
+}
+
+/** Karaoke: vocals turned down (centre cancellation) and big, centred synced lyrics. */
+function bindKaraoke(np) {
+  const btn = $('[data-np-karaoke]', np);
+  let before = null;
+  const set = (on) => {
+    np.classList.toggle('karaoke', on);
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', String(on));
+    if (on) { before = prefs.get('karaoke', false); prefs.set('karaoke', true); if (!np.classList.contains('show-lyrics')) lyricsPane?.toggle(); }
+    else if (before !== null) { prefs.set('karaoke', before); before = null; }
+    player.applyEq();
+  };
+  btn.addEventListener('click', () => set(!np.classList.contains('karaoke')));
+  karaokeToggle = () => { toggleNowPlaying(true); set(!np.classList.contains('karaoke')); };
+}
+let karaokeToggle = () => {};
+
 // ───────────────────────── Keyboard ─────────────────────────
 
 function bindKeys() {
@@ -763,7 +911,10 @@ function bindKeys() {
       q: () => toggleQueue(),
       p: () => miniSupported() && toggleMiniPlayer().catch(() => {}),
       l: () => { if (player.current) { toggleNowPlaying(true); lyricsPane?.toggle(); } },
-      e: async () => { await openEqualizer(); $('[data-eq]')?.classList.toggle('on', !!eq.enabled); },
+      b: () => player.current && addBookmark(),
+      v: () => { if (player.current) { toggleNowPlaying(true); $('[data-np-vis]').click(); } },
+      k: () => player.current && karaokeToggle(),
+      e: async () => { await openEqualizer(); $('[data-eq]')?.classList.toggle('on', !!eq.enabled || sound.active); },
       '/': () => { toggleNowPlaying(false); $('.search input').focus(); },
     }[k.length === 1 ? k.toLowerCase() : k];
     if (handled) {

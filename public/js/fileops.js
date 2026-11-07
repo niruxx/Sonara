@@ -217,11 +217,40 @@ export async function organizeDialog(scope) {
   });
 }
 
+/** Identify a song by its sound (AcoustID) and write the chosen match into its tags. */
+export function identifyDialog(track) {
+  return modal(html`<h3>${ic('waves')} Identify “${track.title}”</h3>
+    <p>Sonara fingerprints the audio and looks it up on AcoustID / MusicBrainz. Pick the right match to write it into the file.</p>
+    <div data-results><div class="progress indeterminate"><i></i></div><p class="muted">Listening…</p></div>
+    <div class="modal-actions"><button class="btn ghost" data-close>Close</button></div>`, async (box, close) => {
+    const out = box.querySelector('[data-results]');
+    let list;
+    try { list = await api.post(`/admin/tracks/${track.id}/identify`); } catch (err) { out.innerHTML = String(html`<p class="form-error">${err.message}</p>`); return; }
+    if (!list.length) { out.innerHTML = String(html`<p class="muted">No match found. The recording may not be in AcoustID yet.</p>`); return; }
+    out.innerHTML = String(html`<div class="find-list">${list.map((c, i) => html`<div class="find-row">
+      <div class="grow"><b>${c.title}</b><div class="muted">${c.artist}${c.album ? ` · ${c.album}` : ''}${c.type ? ` (${c.type})` : ''} · ${c.score}% match</div></div>
+      <button class="btn sm" data-apply="${i}">Apply</button></div>`)}</div>`);
+    out.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-apply]');
+      if (!b) return;
+      const c = list[Number(b.dataset.apply)];
+      if (!(await ensureFileChanges())) return;
+      b.disabled = true;
+      try {
+        await api.post('/admin/tracks/tags', { ids: [track.id], tags: { title: c.title, artist: c.artist, ...(c.album ? { album: c.album, albumArtist: c.albumArtist } : {}) } });
+        toast(`Tagged “${c.title}” by ${c.artist}`, { type: 'success' });
+        close(true);
+      } catch (err) { toastError(err); b.disabled = false; }
+    });
+  });
+}
+
 /** Menu items for track menus (admins only). */
 export function fileMenuItems(tracks) {
   if (!isAdmin()) return [];
   return [
     { icon: 'edit', label: tracks.length > 1 ? `Edit info of ${tracks.length} songs…` : 'Edit info…', action: () => editTagsDialog(tracks) },
+    ...(tracks.length === 1 ? [{ icon: 'waves', label: 'Identify song…', action: () => identifyDialog(tracks[0]) }] : []),
     { icon: 'folder', label: 'Move to folder…', action: () => moveDialog(tracks) },
   ];
 }

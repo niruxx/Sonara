@@ -117,6 +117,13 @@ export function parseFeed(xml) {
     // Video podcasts still play as audio in an <audio> element, but plain documents don't.
     if (mime && !/^(audio|video)\//i.test(mime) && !/octet-stream|x-m4a|mpeg/i.test(mime)) continue;
     const title = tag(without(it, 'image'), 'title') || 'Untitled episode';
+    // Podcasting 2.0 chapters / transcripts (best transcript format first), Podlove inline chapters.
+    const transcripts = [...it.matchAll(/<podcast:transcript\b[^>]*>/gi)].map((t) => ({ url: attr(t[0], 'podcast:transcript', 'url'), type: attr(t[0], 'podcast:transcript', 'type').toLowerCase() }))
+      .filter((t) => t.url);
+    const rank = (type) => ['text/vtt', 'application/x-subrip', 'application/srt', 'text/srt', 'application/json'].indexOf(type);
+    transcripts.sort((a, b) => (rank(a.type) < 0 ? 99 : rank(a.type)) - (rank(b.type) < 0 ? 99 : rank(b.type)));
+    const inline = [...it.matchAll(/<psc:chapter\b[^>]*>/gi)].map((c) => ({ start: parseDuration(attr(c[0], 'psc:chapter', 'start')), title: attr(c[0], 'psc:chapter', 'title') }))
+      .filter((c) => c.start != null && c.title);
     const guid = tag(it, 'guid') || tag(it, 'id') || audioUrl;
     const publishedAt = parseDate(tag(it, 'pubDate') || tag(it, 'published') || tag(it, 'updated') || tag(it, 'dc:date'));
     feed.items.push({
@@ -130,6 +137,10 @@ export function parseFeed(xml) {
       size: size > 0 ? size : null,
       season: int(tag(it, 'itunes:season'), null),
       episode: int(tag(it, 'itunes:episode'), null),
+      chaptersUrl: attr(it, 'podcast:chapters', 'url') || null,
+      chapters: inline.length ? inline.slice(0, 500) : null,
+      transcriptUrl: transcripts[0]?.url || null,
+      transcriptType: transcripts[0]?.type || null,
     });
   }
   return feed;
@@ -152,14 +163,17 @@ function storeFeed(p, feed) {
   tx(() => {
     q(`UPDATE podcasts SET title = ?, author = ?, description = ?, link = ?, last_checked = ?, last_error = NULL WHERE id = ?`)
       .run(feed.title.slice(0, 300), feed.author.slice(0, 300), feed.description, feed.link || null, now, p.id);
-    const up = q(`INSERT INTO podcast_episodes (podcast_id, guid, title, description, published_at, duration, audio_url, mime, size, season, episode)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    const up = q(`INSERT INTO podcast_episodes (podcast_id, guid, title, description, published_at, duration, audio_url, mime, size, season, episode,
+        chapters, chapters_url, transcript_url, transcript_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(podcast_id, guid) DO UPDATE SET title = excluded.title, description = excluded.description,
         published_at = COALESCE(excluded.published_at, published_at), duration = COALESCE(excluded.duration, duration),
         audio_url = excluded.audio_url, mime = excluded.mime, size = COALESCE(excluded.size, size),
-        season = excluded.season, episode = excluded.episode`);
+        season = excluded.season, episode = excluded.episode, chapters = excluded.chapters, chapters_url = excluded.chapters_url,
+        transcript_url = excluded.transcript_url, transcript_type = excluded.transcript_type`);
     for (const it of feed.items.slice(0, MAX_EPISODES)) {
-      up.run(p.id, it.guid, it.title, it.description, it.publishedAt, it.duration, it.audioUrl, it.mime, it.size, it.season, it.episode);
+      up.run(p.id, it.guid, it.title, it.description, it.publishedAt, it.duration, it.audioUrl, it.mime, it.size, it.season, it.episode,
+        it.chapters ? JSON.stringify(it.chapters) : null, it.chaptersUrl, it.transcriptUrl, it.transcriptType);
     }
   });
 }
@@ -317,13 +331,14 @@ function autoDownload(podcastId) {
 
 const EPISODE_COLS = `e.id, e.podcast_id AS podcastId, p.title AS podcast, p.author, p.image AS cover, e.title, e.description,
   e.published_at AS publishedAt, e.duration, e.mime, e.size, e.season, e.episode, e.file IS NOT NULL AS downloaded, e.file_size AS fileSize,
+  (e.chapters IS NOT NULL OR e.chapters_url IS NOT NULL) AS hasChapters, e.transcript_url IS NOT NULL AS hasTranscript,
   COALESCE(pp.position, 0) AS position, COALESCE(pp.played, 0) AS played, pp.updated_at AS progressAt`;
 const EPISODE_FROM = `FROM podcast_episodes e JOIN podcasts p ON p.id = e.podcast_id
   LEFT JOIN podcast_progress pp ON pp.episode_id = e.id AND pp.user_id = ?`;
 
 const episodeOut = (e) => {
   const d = downloads.get(e.id);
-  return { ...e, downloaded: !!e.downloaded, played: !!e.played, downloading: d ? { received: d.received, total: d.total, error: d.error || null } : null };
+  return { ...e, downloaded: !!e.downloaded, played: !!e.played, hasChapters: !!e.hasChapters, hasTranscript: !!e.hasTranscript, downloading: d ? { received: d.received, total: d.total, error: d.error || null } : null };
 };
 
 const PODCAST_COLS = `p.id, p.title, p.author, p.description, p.link, p.image AS cover, p.feed_url AS feedUrl, p.last_checked AS lastChecked,
@@ -446,6 +461,78 @@ podcastsApi.get('/episodes/:id/stream', h(async (req, res) => {
   res.on('close', () => up.destroy());
   up.on('error', () => res.destroy());
   up.pipe(res);
+}));
+
+// ── Chapters and transcripts (fetched from the podcast's host on first use, then cached)
+
+const sideCache = new Map(); // `${kind}:${id}` -> { at, data }
+function cached(key, fn) {
+  const hit = sideCache.get(key);
+  if (hit && Date.now() - hit.at < 6 * 3600000) return hit.data;
+  const data = fn();
+  sideCache.set(key, { at: Date.now(), data });
+  if (sideCache.size > 200) sideCache.delete(sideCache.keys().next().value);
+  data.catch?.(() => sideCache.delete(key));
+  return data;
+}
+
+const tsec = (s) => {
+  const m = String(s).trim().replace(',', '.').match(/^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/);
+  return m ? (Number(m[1] || 0) * 3600 + Number(m[2]) * 60 + Number(m[3])) : null;
+};
+
+/** WebVTT / SRT / Podcast Index JSON transcripts → [{ t, end, text, speaker }]. */
+export function parseTranscript(text, type = '') {
+  const body = String(text).replace(/^\uFEFF/, '');
+  if (type.includes('json') || /^\s*\{/.test(body)) {
+    const j = JSON.parse(body);
+    return (j.segments || []).map((s) => ({ t: Number(s.startTime) || 0, end: Number(s.endTime) || null, text: String(s.body || '').trim(), speaker: s.speaker || null })).filter((c) => c.text);
+  }
+  const cues = [];
+  for (const block of body.split(/\r?\n\r?\n+/)) {
+    const lines = block.split(/\r?\n/).filter((l) => l.trim());
+    const i = lines.findIndex((l) => l.includes('-->'));
+    if (i < 0) continue;
+    const [a, b] = lines[i].split('-->');
+    const start = tsec(a), end = tsec(b.split(/\s/).filter(Boolean)[0]);
+    if (start == null) continue;
+    let textLines = lines.slice(i + 1).join(' ');
+    let speaker = null;
+    const v = textLines.match(/<v\s+([^>]+)>/);
+    if (v) speaker = v[1].trim();
+    textLines = textLines.replace(/<[^>]+>/g, '').trim();
+    if (textLines) cues.push({ t: start, end, text: decodeEntities(textLines), speaker });
+  }
+  // Many transcripts split sentences into tiny cues: merge neighbours into readable lines.
+  const merged = [];
+  for (const c of cues) {
+    const last = merged[merged.length - 1];
+    if (last && last.speaker === c.speaker && last.text.length < 90 && !/[.!?]$/.test(last.text)) { last.text += ` ${c.text}`; last.end = c.end; } else merged.push({ ...c });
+  }
+  return merged.slice(0, 20000);
+}
+
+podcastsApi.get('/episodes/:id/chapters', h(async (req, res) => {
+  const ep = episodeFor(req);
+  if (ep.chapters) return res.json(JSON.parse(ep.chapters));
+  if (!ep.chapters_url) return res.json([]);
+  const list = await cached(`ch:${ep.id}`, async () => {
+    const r = await fetchText(ep.chapters_url, { allowPrivate: !!ep.trusted, limit: 2 * 1024 * 1024, accept: 'application/json+chapters, application/json' });
+    const j = JSON.parse(r.text);
+    return (j.chapters || []).filter((c) => c.toc !== false && Number.isFinite(Number(c.startTime)))
+      .map((c) => ({ start: Number(c.startTime), title: String(c.title || '').slice(0, 200), url: /^https?:/.test(c.url || '') ? c.url : null })).slice(0, 500);
+  });
+  res.json(list);
+}));
+
+podcastsApi.get('/episodes/:id/transcript', h(async (req, res) => {
+  const ep = episodeFor(req);
+  if (!ep.transcript_url) return res.json({ found: false });
+  const cues = await cached(`tr:${ep.id}`, async () => {
+    const r = await fetchText(ep.transcript_url, { allowPrivate: !!ep.trusted, limit: 8 * 1024 * 1024 });
+    return parseTranscript(r.text, ep.transcript_type || String(r.headers['content-type'] || ''));
+  });
+  res.json({ found: cues.length > 0, cues });
 }));
 
 podcastsApi.put('/episodes/:id/progress', (req, res) => {

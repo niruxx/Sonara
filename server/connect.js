@@ -98,11 +98,25 @@ const cleanTrack = (t) => t && {
   artists: Array.isArray(t.artists) ? t.artists.slice(0, 10).map((a) => ({ id: String(a.id || ''), name: String(a.name || '') })) : [],
 };
 
+// Listeners for playback changes (webhooks, MQTT): fn({ user, type: 'track' | 'play' | 'pause', state }).
+const changeListeners = new Set();
+export const onPlaybackChange = (fn) => { changeListeners.add(fn); return () => changeListeners.delete(fn); };
+
+/** Send a command to the tab a user played on most recently (for MQTT / Home Assistant buttons). */
+export function commandUser(userId, cmd, args = {}) {
+  let best = null;
+  for (const c of clients.values()) if (c.userId === userId && c.state?.track && (!best || c.state.at > best.state.at)) best = c;
+  if (!best) return false;
+  send(best.res, 'command', { cmd, args, from: 'Home Assistant' });
+  return true;
+}
+
 /** POST /connect/state { device, state } — a browser reporting what it is playing. */
 export function stateHandler(req, res) {
   const c = clients.get(String(req.body?.device || ''));
   if (!c || c.userId !== req.user.id) return res.status(404).json({ error: 'Device not connected' });
   const s = req.body?.state || {};
+  const before = c.state;
   c.state = {
     playing: !!s.playing, time: Math.max(0, Number(s.time) || 0), duration: Math.max(0, Number(s.duration) || 0),
     volume: Math.min(1, Math.max(0, Number(s.volume ?? 1))), track: cleanTrack(s.track),
@@ -110,6 +124,9 @@ export function stateHandler(req, res) {
     shuffle: !!s.shuffle, repeat: ['off', 'all', 'one'].includes(s.repeat) ? s.repeat : 'off', at: Date.now(),
   };
   for (const o of clients.values()) if (o.userId === c.userId && o.id !== c.id) send(o.res, 'state', { device: c.id, state: c.state });
+  const type = c.state.track && c.state.track.id !== before?.track?.id && c.state.playing ? 'track'
+    : before && c.state.playing !== before.playing && c.state.track ? (c.state.playing ? 'play' : 'pause') : null;
+  if (type) for (const fn of changeListeners) { try { fn({ user: req.user, type, state: c.state }); } catch { /* a listener failing is its own problem */ } }
   for (const p of parties.values()) if (p.hostClient === c.id) { p.state = c.state; partyChanged(p, { stateOnly: true }); }
   res.json({ ok: true });
 }
@@ -142,7 +159,59 @@ export async function commandHandler(req, res) {
 
 function partyInfo(p) {
   const members = [...p.members].map((id) => clients.get(id)).filter(Boolean).map((c) => ({ id: c.id, username: c.username, device: c.name }));
-  return { id: p.id, host: p.hostName, hostUserId: p.hostUserId, hostClient: p.hostClient, members, state: p.state, createdAt: p.createdAt, ended: !!p.ended };
+  // Song requests, most votes first (then oldest first).
+  const requests = (p.requests || []).map((r) => ({ id: r.id, track: r.track, by: r.by, votes: r.votes.size, voters: [...r.voterNames], at: r.at }))
+    .sort((a, b) => b.votes - a.votes || a.at - b.at);
+  return { id: p.id, host: p.hostName, hostUserId: p.hostUserId, hostClient: p.hostClient, members, state: p.state, createdAt: p.createdAt, ended: !!p.ended, requests };
+}
+
+/** Is this user the host or a member (on any of their devices) of the party? */
+function inParty(p, user) {
+  if (p.hostUserId === user.id) return true;
+  for (const id of p.members) if (clients.get(id)?.userId === user.id) return true;
+  return false;
+}
+
+// POST /party/:id/requests { trackId } — ask the host to play a song (counts as your vote too).
+export function requestSong(req, res) {
+  const p = parties.get(String(req.params.id));
+  if (!p) return res.status(404).json({ error: 'This listening party has ended' });
+  if (!inParty(p, req.user)) return res.status(403).json({ error: 'Join the party first' });
+  const t = trackRow(req.body?.trackId);
+  if (!t) return res.status(404).json({ error: 'Track not found' });
+  p.requests ||= [];
+  let r = p.requests.find((x) => x.track.id === t.id);
+  if (!r) {
+    if (p.requests.length >= 100) return res.status(429).json({ error: 'The request list is full' });
+    r = { id: crypto.randomBytes(4).toString('hex'), track: publicTrack(t), by: req.user.username, votes: new Set(), voterNames: new Set(), at: Date.now() };
+    p.requests.push(r);
+  }
+  r.votes.add(req.user.id);
+  r.voterNames.add(req.user.username);
+  partyChanged(p);
+  res.json(partyInfo(p));
+}
+
+// POST /party/:id/requests/:rid/vote { up: true|false }
+export function voteRequest(req, res) {
+  const p = parties.get(String(req.params.id));
+  const r = p?.requests?.find((x) => x.id === req.params.rid);
+  if (!p || !r) return res.status(404).json({ error: 'That request is gone' });
+  if (!inParty(p, req.user)) return res.status(403).json({ error: 'Join the party first' });
+  if (req.body?.up === false) { r.votes.delete(req.user.id); r.voterNames.delete(req.user.username); } else { r.votes.add(req.user.id); r.voterNames.add(req.user.username); }
+  partyChanged(p);
+  res.json(partyInfo(p));
+}
+
+// DELETE /party/:id/requests/:rid — the host (played or declined it) or whoever asked.
+export function removeRequest(req, res) {
+  const p = parties.get(String(req.params.id));
+  const r = p?.requests?.find((x) => x.id === req.params.rid);
+  if (!p || !r) return res.status(404).json({ error: 'That request is gone' });
+  if (p.hostUserId !== req.user.id && r.by !== req.user.username) return res.status(403).json({ error: 'Only the host can remove other people’s requests' });
+  p.requests = p.requests.filter((x) => x !== r);
+  partyChanged(p);
+  res.json(partyInfo(p));
 }
 
 function partyChanged(p, { stateOnly = false } = {}) {
@@ -197,6 +266,16 @@ export function leaveParty(req, res) {
     log.info(`[party] ${p.hostName}'s listening party ended`);
   } else if (p.members.delete(id)) partyChanged(p);
   res.json({ ok: true });
+}
+
+/** What a user is playing right now on any of their browser tabs (most recent state), or null. */
+export function nowPlayingFor(userId) {
+  let best = null;
+  for (const c of clients.values()) {
+    if (c.userId !== userId || !c.state?.track || !c.state.playing) continue;
+    if (!best || c.state.at > best.at) best = c.state;
+  }
+  return best;
 }
 
 export const connectStats = () => ({ clients: clients.size, serverDevices: serverDevices.size, parties: parties.size });

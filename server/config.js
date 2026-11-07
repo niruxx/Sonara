@@ -49,9 +49,14 @@ const DEFAULTS = {
   onlineContact: '',        // added to the User-Agent sent to MusicBrainz etc.
   onlinePodcastDirectory: false, // search podcasts in the Apple Podcasts directory
   onlineRadioDirectory: false,   // search stations on radio-browser.info
+  acoustidApiKey: '',            // identify songs by their sound (also needs fpcalc)
+  fpcalcPath: '',
+  onlineDiscography: false,      // MusicBrainz discographies: missing albums and new releases
   // Podcasts
   podcastRefreshHours: 6,    // how often feeds are checked for new episodes (0 = only by hand)
   podcastDownloadMB: 1024,   // largest single episode the server will download
+  // Analyse the library in the background with ffmpeg (waveforms, loudness, tempo, key, "sounds like").
+  analysis: true,
   sessionDays: 30,
   // Public URL people use to reach Sonara (e.g. https://music.example.com). Used for share
   // links, single sign-on and casting. '' = work it out from each request.
@@ -63,6 +68,13 @@ const DEFAULTS = {
   mpvPath: '',
   dlna: false,               // find DLNA / UPnP speakers on the network and play to them
   dlnaFormat: 'mp3',         // mp3 (plays everywhere) | original
+  snapcast: false,           // multi-room playback through a Snapcast server (needs ffmpeg)
+  snapcastHost: '127.0.0.1',
+  snapcastPort: 4953,        // the TCP source in snapserver.conf (mode=server)
+  snapcastControlPort: 1705, // Snapcast's JSON-RPC port, to list rooms
+  // Home Assistant / MQTT, e.g. mqtt://user:pass@homeassistant.local:1883 ('' = off)
+  mqttUrl: '',
+  mqttPrefix: 'sonara',
   // Sign-in
   proxyAuthHeader: '',       // e.g. "Remote-User" behind Authelia / Authentik ('' = off)
   proxyAuthTrusted: ['127.0.0.1', '::1'], // addresses allowed to send that header

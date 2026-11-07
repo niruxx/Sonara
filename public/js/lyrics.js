@@ -5,6 +5,7 @@ import { html, ic, prefs } from './util.js';
 import { player } from './player.js';
 import { state } from './state.js';
 import { modal, toast, toastError } from './ui.js';
+import { t as tr } from './i18n.js';
 
 /** Parse LRC text → { synced: [{ t, text }] } or { plain: [lines] }. */
 export function parseLrc(text) {
@@ -71,9 +72,29 @@ export function attachLyrics(np) {
   async function load(refresh = false) {
     const t = player.current;
     if (!open || !t) return;
+    if (t.kind === 'episode') {
+      current = { trackId: t.id };
+      render(null);
+      const tr = await api.get(`/podcasts/episodes/${t.episodeId}/transcript`).catch(() => ({ found: false }));
+      if (player.current?.id !== t.id) return;
+      if (!tr.found) {
+        pane.innerHTML = String(html`<div class="lyr-empty">${ic('podcast')}<p>${tr('No transcript for this episode')}</p><span class="muted">${tr('Shows that publish transcripts (Podcasting 2.0) appear here, in sync.')}</span></div>`);
+        return;
+      }
+      // Same display as synced lyrics, with the speaker's name when it changes.
+      let last = null;
+      const synced = tr.cues.map((c) => { const who = c.speaker && c.speaker !== last ? c.speaker : null; last = c.speaker; return { t: c.t, text: c.text, who }; });
+      current = { trackId: t.id, synced, plain: null };
+      activeIdx = -1;
+      pane.innerHTML = String(html`<div class="lyr-lines synced transcript">${synced.map((l, i) => html`${l.who ? html`<p class="lyr-who">${l.who}</p>` : ''}<p class="lyr-line" data-i="${i}" data-t="${l.t}">${l.text}</p>`)}</div>
+        <div class="lyr-foot muted">${tr('Transcript from the podcast')}</div>`);
+      pane.scrollTop = 0;
+      sync(true);
+      return;
+    }
     if (typeof t.id !== 'number') {
       current = { trackId: t.id };
-      pane.innerHTML = String(html`<div class="lyr-empty">${ic(t.live ? 'radio' : 'podcast')}<p>${t.live ? 'Lyrics aren’t available for radio' : 'Lyrics aren’t available for podcasts'}</p></div>`);
+      pane.innerHTML = String(html`<div class="lyr-empty">${ic('radio')}<p>${tr('Lyrics aren’t available for radio')}</p></div>`);
       return;
     }
     if (!refresh && current?.trackId === t.id) return;

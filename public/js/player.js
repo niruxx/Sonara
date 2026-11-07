@@ -52,6 +52,21 @@ export const eq = {
   get autoHeadroom() { return prefs.get('eqHeadroom', true); },
 };
 
+/** Sound processing beyond the EQ, stored per browser (see sound.js for the editor). */
+export const HP_SLOTS = 16;
+export const sound = {
+  get nightMode() { return !!prefs.get('nightMode', false); },   // dynamic range compression
+  get mono() { return !!prefs.get('mono', false); },
+  get balance() { return clamp(Number(prefs.get('balance', 0)) || 0, -1, 1); },
+  get karaoke() { return !!prefs.get('karaoke', false); },       // centre (vocal) reduction
+  /** Active headphone correction: { name, preamp, filters: [{ type, fc, gain, q }] } or null. */
+  get headphone() {
+    const id = prefs.get('hpActive', null);
+    return id ? (prefs.get('hpProfiles', []).find((p) => p.id === id) || null) : null;
+  },
+  get active() { return this.nightMode || this.mono || this.balance !== 0 || this.karaoke || !!this.headphone; },
+};
+
 /** Playback settings, stored per browser. */
 export const playback = {
   get gapless() { return prefs.get('gapless', true); },
@@ -74,6 +89,27 @@ export const deviceName = () => {
   const br = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
   return `${br ? br + ' on ' : ''}${os}`;
 };
+
+/**
+ * Shuffle that feels random to people: songs you rate or love come up a bit more
+ * often, and the same artist doesn't play twice in a row when it can be avoided.
+ */
+export function smartShuffle(list) {
+  const weight = (t) => 1 + (t.rating || 0) * 0.35 + (t.favorite ? 1 : 0);
+  const keyed = list.map((t) => [Math.random() ** (1 / weight(t)), t]).sort((a, b) => b[0] - a[0]).map((x) => x[1]);
+  const artist = (t) => (t.artistId ?? t.artist ?? '').toString();
+  for (let i = 1; i < keyed.length; i++) {
+    if (artist(keyed[i]) !== artist(keyed[i - 1])) continue;
+    for (let j = i + 1; j < Math.min(keyed.length, i + 25); j++) {
+      if (artist(keyed[j]) !== artist(keyed[i - 1])) {
+        [keyed[i], keyed[j]] = [keyed[j], keyed[i]];
+        break;
+      }
+    }
+  }
+  return keyed;
+}
+const shuffled = (list) => (prefs.get('smartShuffle', true) ? smartShuffle(list) : shuffleArray(list));
 
 class Player extends Emitter {
   decks = [new Audio(), new Audio()];
@@ -258,7 +294,7 @@ class Player extends Emitter {
     if (this.shuffle) {
       const first = shuffle && start === 0 ? Math.floor(Math.random() * tracks.length) : start;
       const rest = tracks.filter((_, i) => i !== first);
-      this.queue = [tracks[first], ...shuffleArray(rest)];
+      this.queue = [tracks[first], ...shuffled(rest)];
       this.index = 0;
     } else {
       // A copy: queue and original must be separate arrays, or "Play next" / "Add to queue" insert everything twice.
@@ -451,7 +487,7 @@ class Player extends Emitter {
     if (cur) {
       if (this.shuffle) {
         const rest = this.original.filter((t) => t !== cur);
-        this.queue = [cur, ...shuffleArray(rest)];
+        this.queue = [cur, ...shuffled(rest)];
         this.index = 0;
       } else {
         this.queue = this.original.slice();
@@ -494,8 +530,9 @@ class Player extends Emitter {
       const next = neighbours[i + 1];
       useAlbum = !this.shuffle && [prev, next].some((n) => n && n.albumId === t.albumId);
     }
-    const g = useAlbum ? t.rgAlbumGain ?? t.rgTrackGain : t.rgTrackGain ?? t.rgAlbumGain;
-    const p = useAlbum ? t.rgAlbumPeak ?? t.rgTrackPeak : t.rgTrackPeak ?? t.rgAlbumPeak;
+    // Tags first; otherwise what Sonara measured itself (see analysis.js).
+    const g = useAlbum ? t.rgAlbumGain ?? t.rgTrackGain ?? t.calcAlbumGain ?? t.calcTrackGain : t.rgTrackGain ?? t.rgAlbumGain ?? t.calcTrackGain ?? t.calcAlbumGain;
+    const p = useAlbum ? t.rgAlbumPeak ?? t.rgTrackPeak ?? t.calcAlbumPeak ?? t.calcPeak : t.rgTrackPeak ?? t.rgAlbumPeak ?? t.calcPeak ?? t.calcAlbumPeak;
     const db = (g ?? playback.fallbackGain) + playback.preamp;
     let lin = 10 ** (db / 20);
     if (playback.preventClipping && p > 0) lin = Math.min(lin, 1 / p);
@@ -800,7 +837,7 @@ class Player extends Emitter {
       if (!list.length) return toast('Not enough music to start a radio station yet', { type: 'error' });
       // A song or album radio starts with the seed itself.
       let first = [];
-      if (seed.startsWith('track:')) {
+      if (seed.startsWith('track:') || seed.startsWith('sound:')) {
         const [t] = await api.post('/tracks/lookup', { ids: [Number(seed.slice(6))] });
         if (t) first = [t];
       }
@@ -849,23 +886,65 @@ class Player extends Emitter {
       if (this.ctx.state === 'suspended') this.ctx.resume();
       return true;
     }
-    if (prefs.get('visualizer', true) === false && !eq.enabled) return false;
+    if (prefs.get('visualizer', true) === false && !eq.enabled && !sound.active) return false;
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new Ctx();
-      this.eqInput = this.ctx.createGain();
+      const ctx = this.ctx = new Ctx();
+      const gain = (v = 1) => { const g = ctx.createGain(); g.gain.value = v; return g; };
+      // decks → karaoke → headphone correction → EQ → mono / balance → night mode → analyser → speakers.
+      // Each optional stage has a "dry" and a "wet" path; switching a feature just swaps their gains.
+      this.eqInput = gain();
+      const k = this.karaokeNodes = { out: gain(), dry: gain(1), wet: gain(0) };
+      const split = ctx.createChannelSplitter(2);
+      const side = gain(1);
+      side.channelCount = 1; side.channelCountMode = 'explicit';
+      const invert = gain(-1);
+      const merge = ctx.createChannelMerger(2);
+      const bass = ctx.createBiquadFilter();
+      bass.type = 'lowpass'; bass.frequency.value = 140;
+      // Vocals usually sit in the centre: left minus right removes them; the bass (also centred) is added back.
+      this.eqInput.connect(split);
+      split.connect(side, 0);
+      split.connect(invert, 1);
+      invert.connect(side);
+      side.connect(merge, 0, 0);
+      side.connect(merge, 0, 1);
+      merge.connect(k.wet);
+      this.eqInput.connect(bass).connect(k.wet);
+      this.eqInput.connect(k.dry);
+      k.dry.connect(k.out);
+      k.wet.connect(k.out);
+
+      this.hpPreamp = gain();
+      this.hpFilters = Array.from({ length: HP_SLOTS }, () => { const f = ctx.createBiquadFilter(); f.type = 'peaking'; f.gain.value = 0; return f; });
       this.eqFilters = EQ_BANDS.map((f, i) => {
-        const n = this.ctx.createBiquadFilter();
+        const n = ctx.createBiquadFilter();
         n.type = i === 0 ? 'lowshelf' : i === EQ_BANDS.length - 1 ? 'highshelf' : 'peaking';
         n.frequency.value = f;
         n.Q.value = 1.1;
         return n;
       });
-      this.analyser = this.ctx.createAnalyser();
+      [k.out, this.hpPreamp, ...this.hpFilters, ...this.eqFilters].reduce((a, b) => (a.connect(b), b));
+      const eqOut = this.eqFilters[this.eqFilters.length - 1];
+
+      const m = this.monoNodes = { dry: gain(1), wet: gain(0), out: gain() };
+      const down = gain(1);
+      down.channelCount = 1; down.channelCountMode = 'explicit'; down.channelInterpretation = 'speakers';
+      eqOut.connect(m.dry).connect(m.out);
+      eqOut.connect(down).connect(m.wet).connect(m.out);
+      this.panner = ctx.createStereoPanner();
+      m.out.connect(this.panner);
+
+      const n = this.nightNodes = { dry: gain(1), wet: gain(0), out: gain(), comp: ctx.createDynamicsCompressor(), makeup: gain(10 ** (6 / 20)) };
+      n.comp.threshold.value = -32; n.comp.knee.value = 18; n.comp.ratio.value = 5; n.comp.attack.value = 0.005; n.comp.release.value = 0.3;
+      this.panner.connect(n.dry).connect(n.out);
+      this.panner.connect(n.comp).connect(n.makeup).connect(n.wet).connect(n.out);
+
+      this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 2048;
       this.analyser.smoothingTimeConstant = 0.8;
-      for (const d of this.decks) this.ctx.createMediaElementSource(d).connect(this.eqInput);
-      [this.eqInput, ...this.eqFilters, this.analyser, this.ctx.destination].reduce((a, b) => (a.connect(b), b));
+      for (const d of this.decks) ctx.createMediaElementSource(d).connect(this.eqInput);
+      n.out.connect(this.analyser).connect(ctx.destination);
       this.applyEq();
       return true;
     } catch (err) {
@@ -874,13 +953,14 @@ class Player extends Emitter {
     }
   }
 
-  /** Push the saved EQ settings into the filters (smoothly). */
+  /** Push the saved EQ and sound settings into the audio graph (smoothly). */
   applyEq() {
     if (!this.ctx) {
-      // Turning the EQ on mid-song: build the graph now so it takes effect immediately.
-      if (eq.enabled && this.current) this.#ensureAudioGraph();
+      // Turning the EQ (or a sound feature) on mid-song: build the graph now so it takes effect immediately.
+      if ((eq.enabled || sound.active) && this.current) this.#ensureAudioGraph();
       if (!this.ctx) return;
     }
+    this.#applySound();
     const on = eq.enabled;
     const gains = eq.gains;
     const t = this.ctx.currentTime;
@@ -889,6 +969,27 @@ class Player extends Emitter {
     const boost = on ? Math.max(0, ...gains) : 0;
     const db = on ? eq.preamp - (eq.autoHeadroom ? boost * 0.6 : 0) : 0;
     this.eqInput.gain.setTargetAtTime(10 ** (db / 20), t, 0.03);
+  }
+
+  #applySound() {
+    const t = this.ctx.currentTime;
+    const set = (param, v) => param.setTargetAtTime(v, t, 0.04);
+    const swap = (nodes, on) => { set(nodes.dry.gain, on ? 0 : 1); set(nodes.wet.gain, on ? 1 : 0); };
+    swap(this.karaokeNodes, sound.karaoke);
+    swap(this.monoNodes, sound.mono);
+    swap(this.nightNodes, sound.nightMode);
+    set(this.panner.pan, sound.balance);
+    const hp = sound.headphone;
+    const filters = hp?.filters || [];
+    set(this.hpPreamp.gain, hp ? 10 ** ((Number(hp.preamp) || 0) / 20) : 1);
+    this.hpFilters.forEach((f, i) => {
+      const spec = filters[i];
+      if (!spec) { f.type = 'peaking'; set(f.gain, 0); return; }
+      f.type = spec.type;
+      set(f.frequency, clamp(spec.fc, 10, 22000));
+      set(f.Q, clamp(spec.q || 0.707, 0.05, 30));
+      set(f.gain, clamp(spec.gain || 0, -30, 30));
+    });
   }
 
   #setupMediaSession() {

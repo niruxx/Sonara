@@ -161,39 +161,48 @@ What Sonara already ships:
 
 ---
 
-## Stage 8: Ideas for later
+## Stage 8: Standing out ✅
 
-*Goal: features that would make Sonara stand out as a music player. Nothing here is built yet; items are grouped, not ordered.*
+*Goal: features that make Sonara stand out as a music player.* **Status: complete.** Items marked 🔌 need an optional tool or an opt-in online service; without them the rest of Sonara works as before.
 
 ### Listening
-- [ ] Waveform seek bar (peaks generated once per file 🔌 ffmpeg, cached like covers)
-- [ ] Headphone correction: import AutoEq / parametric EQ profiles per output device
-- [ ] "Night mode" dynamic range compression, plus mono downmix and left/right balance (also an accessibility aid for hearing in one ear)
-- [ ] Loudness analysis for files without ReplayGain tags (EBU R128 via 🔌 ffmpeg), stored in the database instead of the files
-- [ ] Wake-up alarm that fades in a playlist or station
-- [ ] Bookmarks and chapters for long mixes and DJ sets; Podcasting 2.0 chapters and transcripts for podcasts
+- [x] **Waveform seek bar**, from Sonara's own audio analysis (server with 🔌 ffmpeg, or in the browser as songs play)
+- [x] **Headphone correction**: AutoEq / Equalizer APO parametric profiles, searchable from the AutoEq list on GitHub or pasted, applied before the EQ (per browser)
+- [x] **Night mode** (dynamic range compression), **mono** downmix and **left/right balance**
+- [x] **Loudness analysis** (EBU R128, measured by Sonara's analyser) for files without ReplayGain tags, with album gain once a whole album is measured; stored in the database, files untouched
+- [x] **Wake-up alarm** that fades in a playlist, smart playlist, mix, station or the whole library (runs in an open browser tab)
+- [x] **Bookmarks** in songs and episodes (press B), shown on the seek bar; **Podcasting 2.0 chapters** (and Podlove inline chapters) and **synced transcripts** (WebVTT, SRT, JSON) in the lyrics pane
 
 ### Library intelligence
-- [ ] Acoustic fingerprinting (🔌 Chromaprint / AcoustID) to identify untagged files and suggest MusicBrainz tags
-- [ ] BPM and key detection, with filters and smart playlist rules that use them
-- [ ] "Missing albums" and new-release alerts for artists you own, from the MusicBrainz discography
-- [ ] Import listening history from Last.fm, ListenBrainz or a Spotify data export, so stats and "Rediscover" work from day one
-- [ ] Match playlists exported from Spotify / Apple Music (CSV) against the local library
+- [x] **Acoustic fingerprinting** with 🔌 Chromaprint (fpcalc) and AcoustID: "Identify song…" suggests MusicBrainz matches and writes the chosen one into the tags
+- [x] **BPM and key detection** (with Camelot codes), shown in track details and usable in smart playlist rules and sorting
+- [x] **Missing albums** on artist pages and **new releases** on Home, from the 🔌 MusicBrainz discography (opt-in, cached two weeks)
+- [x] **Import listening history** from 🔌 Last.fm, 🔌 ListenBrainz or a Spotify data export (read in the browser), matched by artist and title, without duplicates
+- [x] **CSV / TSV playlists** from Spotify (Exportify), Apple Music, TuneMyMusic and others, matched tolerantly ("feat.", "Remastered", accents)
 
 ### Discovery
-- [ ] "Sounds like" recommendations from local audio analysis (no online service needed)
-- [ ] Smart shuffle that avoids the same artist back to back and favours songs you rate highly
-- [ ] Mood / activity mixes generated from genres, tempo and listening time of day
+- [x] **"Sounds like this"**: radio from the nearest songs by analysed sound (tempo, energy, timbre, key), fully local
+- [x] **Smart shuffle**: no artist twice in a row when avoidable; favourites and high ratings come up more often
+- [x] **Mood and time-of-day mixes** on Home (Chill, Focus, Workout, Party, and what you usually play at this hour), new picks every day; genres fill in until songs are analysed
 
 ### Social and home
-- [ ] Song requests and voting in listening parties
-- [ ] Friend activity: what people on the same server are playing (opt-in)
-- [ ] Multi-room synced playback across speakers (🔌 Snapcast)
-- [ ] Home Assistant / MQTT integration and webhooks (now playing, play/pause, start a playlist)
+- [x] **Song requests and voting** in listening parties, live for everyone; the host plays requests next or declines them
+- [x] **Friend activity** on Home (opt-in per user, respects folder access)
+- [x] **Multi-room playback** through 🔌 Snapcast: Sonara streams the queue to a Snapcast TCP source and appears as "All rooms" in the devices menu (needs ffmpeg)
+- [x] **Home Assistant over MQTT** (built-in client, discovery for a now-playing sensor and play/pause, next and previous buttons) and **signed webhooks** per user
 
 ### Fun
-- [ ] More visualizers, including Milkdrop presets (🔌 butterchurn)
-- [ ] Karaoke mode: synced lyrics full screen with vocals reduced (🔌 stem separation, or a simple centre-channel cut)
+- [x] **Visualizer styles**: bars, oscilloscope wave, radial, and Milkdrop presets (🔌 butterchurn, downloaded from jsDelivr only after you agree)
+- [x] **Karaoke mode** (press K): centre-channel vocal reduction and big, centred synced lyrics
+
+### Also in this round
+- [x] **Flat redesign** as the new default look (solid surfaces, one accent colour from the album art, no glass or glow); the classic glass look stays available in Settings → Appearance
+- [x] Context menus: separators now sit between groups (they used to pile up at the bottom of long menus) and long menus scroll as one list
+
+### Not built yet
+- [ ] Stem separation for karaoke (true vocal removal needs a machine-learning model; the centre cut works on most studio mixes, not on mono or wide-panned vocals)
+- [ ] Bookmarks and chapters synced to Chromecast / DLNA playback
+- [ ] Server-side alarms (today the alarm needs an open browser tab; the jukebox or Snapcast could host them)
 
 ---
 

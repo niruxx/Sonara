@@ -10,6 +10,8 @@ import { eqEditor } from '../eq.js';
 import { organizeDialog } from '../fileops.js';
 import { accountExtras, adminPanels, bindExtras, userAccessDialog, offlinePanel } from './settings-extra.js';
 import { t, LANGUAGES, langPref, setLangPref } from '../i18n.js';
+import { historyPanel, bindHistory } from './history-import.js';
+import { analysisPanel, integrationsPanel, webhooksPanel, bindStage8 } from './settings-stage8.js';
 
 const QUALITIES = [[0, 'Original quality'], [320, '320 kbps'], [256, '256 kbps'], [192, '192 kbps'], [160, '160 kbps'], [128, '128 kbps'], [96, '96 kbps'], [64, '64 kbps']];
 
@@ -102,6 +104,7 @@ export async function settingsView({ query } = {}) {
         <label class="check"><input type="checkbox" data-online="onlineCovers" ${settings.onlineCovers ? 'checked' : ''}><span class="sw"></span>Find missing album covers (Cover Art Archive)</label>
         <div class="row-gap" style="margin:6px 0 4px 50px"><button class="btn sm ghost" data-find-covers>${ic('search')} Look for missing covers now</button><span class="muted" data-cover-status></span></div>
         <label class="check"><input type="checkbox" data-online="onlinePodcastDirectory" ${settings.onlinePodcastDirectory ? 'checked' : ''}><span class="sw"></span>${t('Podcast search (Apple Podcasts directory; your search words are sent)')}</label>
+        <label class="check"><input type="checkbox" data-online="onlineDiscography" ${settings.onlineDiscography ? 'checked' : ''}><span class="sw"></span>${t('Missing albums and new releases from artists you have (MusicBrainz)')}</label>
         <label class="check"><input type="checkbox" data-online="onlineRadioDirectory" ${settings.onlineRadioDirectory ? 'checked' : ''}><span class="sw"></span>${html`${t('Radio station search')} (<a href="https://www.radio-browser.info" target="_blank" rel="noopener">radio-browser.info</a>)`}</label>
         <div class="row-gap" style="margin-top:12px">
           <label class="muted" for="pod-refresh">${t('Check podcasts for new episodes every')}</label>
@@ -115,6 +118,8 @@ export async function settingsView({ query } = {}) {
           <input class="input sm mono" type="password" data-key="lastfmSecret" placeholder="${settings.lastfmSecretSet ? '•••••••• (saved)' : 'Shared secret'}" autocomplete="new-password">
           <label class="muted">fanart.tv key</label>
           <input class="input sm mono" data-key="fanartApiKey" value="${settings.fanartApiKey}" placeholder="Optional: better artist photos" autocomplete="off" spellcheck="false">
+          <label class="muted">AcoustID key</label>
+          <input class="input sm mono" data-key="acoustidApiKey" value="${settings.acoustidApiKey}" placeholder="${t('Optional: identify songs by their sound (needs fpcalc)')}" autocomplete="off" spellcheck="false">
           <label class="muted">Contact</label>
           <input class="input sm" data-key="onlineContact" value="${settings.onlineContact}" placeholder="Optional URL or email, sent to MusicBrainz so they can reach you" autocomplete="off">
         </div>
@@ -126,11 +131,16 @@ export async function settingsView({ query } = {}) {
         <div class="users"></div>
         <button class="btn sm primary" data-add-user style="margin-top:8px">${ic('plus')} Add user</button>
       </section>
-      ${adminPanels(settings)}` : ''}
+      ${adminPanels(settings)}
+      ${integrationsPanel(settings)}` : ''}
+      ${analysisPanel(settings)}
 
       <section class="panel" style="--i:4" data-panel="playback">
         <h3>${ic('waves')} Playback</h3><p>How songs flow into each other. Stored in this browser.</p>
         <label class="check"><input type="checkbox" data-pb="gapless" ${playback.gapless ? 'checked' : ''}><span class="sw"></span>Gapless playback</label>
+        <label class="check"><input type="checkbox" data-pb="smartShuffle" ${prefs.get('smartShuffle', true) ? 'checked' : ''}><span class="sw"></span>${t('Smart shuffle (no artist twice in a row; favourites and high ratings come up more)')}</label>
+        <label class="check"><input type="checkbox" data-pb="waveform" ${prefs.get('waveform', true) ? 'checked' : ''}><span class="sw"></span>${t('Waveform seek bar')}</label>
+        <label class="check"><input type="checkbox" data-pb="analyzeInBrowser" ${prefs.get('analyzeInBrowser', true) ? 'checked' : ''}><span class="sw"></span>${t('Analyse songs in this browser when the server can’t (for the waveform, tempo, key and loudness)')}</label>
         <div style="margin-top:14px">
           <label class="muted">Crossfade: <b data-xf-label>${playback.crossfade ? `${playback.crossfade} s` : 'Off'}</b></label>
           <input class="range" type="range" min="0" max="12" step="1" value="${playback.crossfade}" data-pb="crossfade" style="--pct:${(playback.crossfade / 12) * 100}%;margin-top:8px" aria-label="Crossfade seconds">
@@ -181,6 +191,9 @@ export async function settingsView({ query } = {}) {
         <p class="muted" style="font-size:12px;margin-top:10px">${t('Some admin screens are still in English. Translations are welcome: see public/js/locales.')}</p>
 
         <h3 style="margin-top:26px">${ic('palette')} ${t('Appearance')}</h3><p>${t('Make it yours. Stored in this browser.')}</p>
+        <div class="chips fit" role="radiogroup" aria-label="${t('Style')}" style="margin-bottom:10px">
+          ${[['flat', t('Flat')], ['glass', t('Glass (classic)')]].map(([k, l]) => html`<button class="chip ${prefs.get('uiStyle', 'flat') === k ? 'active' : ''}" role="radio" aria-checked="${prefs.get('uiStyle', 'flat') === k}" data-ui-style="${k}">${l}</button>`)}
+        </div>
         <label class="check"><input type="checkbox" data-pref="dynamicColor" ${prefs.get('dynamicColor', true) ? 'checked' : ''}><span class="sw"></span>Colours follow album art</label>
         <label class="check"><input type="checkbox" data-pref="ambient" ${prefs.get('ambient', true) ? 'checked' : ''}><span class="sw"></span>Animated ambient background</label>
         <label class="check"><input type="checkbox" data-pref="visualizer" ${prefs.get('visualizer', true) ? 'checked' : ''}><span class="sw"></span>Audio visualizer &amp; beat-reactive glow</label>
@@ -193,6 +206,8 @@ export async function settingsView({ query } = {}) {
       </section>
 
       ${offlinePanel()}
+      ${historyPanel()}
+      ${webhooksPanel()}
 
       <section class="panel" style="--i:6">
         <h3>${ic('key')} Account</h3><p>Change your password. Other sessions will be signed out.</p>
@@ -201,6 +216,8 @@ export async function settingsView({ query } = {}) {
         <p>Share what you play with Last.fm or ListenBrainz.</p>
         <div class="services"><p class="muted">Loading…</p></div>
         ${accountExtras()}
+        <h3 style="margin-top:26px">${ic('users')} ${t('Friend activity')}</h3>
+        <label class="check"><input type="checkbox" data-share-activity ${state.user.shareActivity ? 'checked' : ''}><span class="sw"></span>${t('Show other people on this server what I’m listening to')}</label>
         <h3 style="margin-top:26px">${ic('keyboard')} Keyboard shortcuts</h3>
         <div class="kbd-list" style="margin-top:12px">
           <kbd class="k">Space</kbd><span>Play / pause</span>
@@ -216,12 +233,27 @@ export async function settingsView({ query } = {}) {
           <kbd class="k">P</kbd><span>Mini player</span>
           <kbd class="k">E</kbd><span>Equalizer</span>
           <kbd class="k">L</kbd><span>Lyrics</span>
+          <kbd class="k">B</kbd><span>Bookmark this moment</span>
+          <kbd class="k">V</kbd><span>Visualizer style</span>
+          <kbd class="k">K</kbd><span>Karaoke</span>
           <kbd class="k">/</kbd><span>Search</span>
         </div>
         <p class="muted" style="font-size:12px;margin-top:10px">${t('Tab moves between controls, and arrow keys move inside menus. In the queue, Enter plays a song and Delete removes it.')}</p>
       </section>
     </div>
   </div>`);
+
+  v.querySelectorAll('[data-ui-style]').forEach((b) => b.addEventListener('click', () => {
+    prefs.set('uiStyle', b.dataset.uiStyle);
+    applyPrefs();
+    v.querySelectorAll('[data-ui-style]').forEach((x) => { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); });
+  }));
+
+  bindHistory(v);
+  bindStage8(v);
+  v.querySelector('[data-share-activity]')?.addEventListener('change', async (e) => {
+    try { await api.put('/me/activity-sharing', { on: e.target.checked }); state.user.shareActivity = e.target.checked; toast(e.target.checked ? t('Others can now see what you play') : t('Your listening is private'), { type: 'success' }); } catch (err) { toastError(err); }
+  });
 
   // ── Language: re-render everything in the new language.
   v.querySelector('[data-lang]').addEventListener('change', (e) => {
@@ -578,6 +610,7 @@ const systemReducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 systemReducedMotion.addEventListener?.('change', () => applyPrefs());
 
 export function applyPrefs() {
+  document.body.classList.toggle('flat', prefs.get('uiStyle', 'flat') !== 'glass');
   document.body.classList.toggle('no-ambient', !prefs.get('ambient', true));
   // The system setting counts too, so the ripple, card tilt and smooth scrolling (done in JS) also calm down.
   document.body.classList.toggle('reduce-motion', !!prefs.get('reduceMotion', false) || systemReducedMotion.matches);

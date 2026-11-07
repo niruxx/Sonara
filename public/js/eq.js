@@ -2,6 +2,8 @@
 import { html, ic, el, prefs } from './util.js';
 import { player, eq, EQ_BANDS, EQ_PRESETS } from './player.js';
 import { modal } from './ui.js';
+import { soundEditor } from './sound.js';
+import { t } from './i18n.js';
 
 const fmtHz = (f) => (f >= 1000 ? `${f / 1000}k` : String(f));
 const fmtDb = (v) => `${v > 0 ? '+' : ''}${Number(v).toFixed(v % 1 ? 1 : 0)}`;
@@ -141,10 +143,12 @@ function drawCurve(cv) {
 }
 
 export function openEqualizer() {
-  return modal(html`<h3>${ic('sliders')} Equalizer</h3><p>Shape the sound. Saved in this browser.</p>
+  return modal(html`<h3>${ic('sliders')} ${t('Sound')}</h3><p>${t('Shape the sound. Saved in this browser.')}</p>
     <div data-eq-host></div>
-    <div class="modal-actions"><button class="btn primary" data-close>Done</button></div>`, (box) => {
+    <div data-sound-host></div>
+    <div class="modal-actions"><button class="btn primary" data-close>${t('Done')}</button></div>`, (box) => {
     box.classList.add('wide');
     box.querySelector('[data-eq-host]').replaceWith(eqEditor());
+    box.querySelector('[data-sound-host]').replaceWith(soundEditor());
   });
 }

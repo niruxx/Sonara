@@ -28,7 +28,7 @@ import {
 } from './auth.js';
 import { oidcEnabled, startUrl as oidcStartUrl, finish as oidcFinish } from './oidc.js';
 import {
-  eventsHandler, stateHandler, commandHandler, devicesFor, createParty, getParty, joinParty, leaveParty,
+  eventsHandler, stateHandler, commandHandler, devicesFor, nowPlayingFor, createParty, getParty, joinParty, leaveParty, requestSong, voteRequest, removeRequest,
 } from './connect.js';
 import { newShareId, signedStreamPath, signedCoverPath, lanBaseUrl } from './public.js';
 import { parsePlaylist, matchEntries, exportPlaylist } from './playlists.js';
@@ -40,6 +40,13 @@ import { baseUrl } from './oidc.js';
 import { DATA_DIR } from './config.js';
 import { podcastsApi } from './podcasts.js';
 import { stationsApi } from './stations.js';
+import { analysisApi, similarIds, mixIds, mixList, analysisStatus, setAnalysisRunning } from './analysis.js';
+import { bookmarksApi } from './bookmarks.js';
+import { identify, fingerprintStatus } from './fingerprint.js';
+import { discographyApi } from './discography.js';
+import { historyApi } from './history.js';
+import { setupSnapcast, snapcastStatus, snapcastRooms } from './snapcast.js';
+import { webhooksApi, setupIntegrations, mqttStatus } from './integrations.js';
 
 export const api = express.Router();
 api.use(express.json({ limit: '1mb' }));
@@ -67,6 +74,8 @@ const TRACK_COLS = `
   t.sample_rate AS sampleRate, t.codec, t.lossless, t.cover, t.added_at AS addedAt,
   t.release_type AS releaseType, t.compilation, t.needs_transcode AS needsTranscode, (t.cue_file IS NOT NULL) AS cue,
   t.rg_track_gain AS rgTrackGain, t.rg_track_peak AS rgTrackPeak, t.rg_album_gain AS rgAlbumGain, t.rg_album_peak AS rgAlbumPeak,
+  ROUND(-18 - an.loudness, 2) AS calcTrackGain, an.peak AS calcPeak, an.album_gain AS calcAlbumGain, an.album_peak AS calcAlbumPeak,
+  an.bpm, an.musical_key AS musicalKey, an.camelot, an.energy,
   (f.track_id IS NOT NULL) AS favorite, COALESCE(r.rating, 0) AS rating,
   COALESCE(pc.n, 0) AS playCount, pc.last AS lastPlayed,
   (SELECT json_group_array(json_array(ta.artist_id, ta.name, ta.position)) FROM track_artists ta
@@ -76,7 +85,8 @@ const TRACK_JOINS = `
   LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = $uid
   LEFT JOIN ratings r ON r.track_id = t.id AND r.user_id = $uid
   LEFT JOIN (SELECT track_id, COUNT(*) AS n, MAX(played_at) AS last FROM plays WHERE user_id = $uid GROUP BY track_id) pc
-    ON pc.track_id = t.id`;
+    ON pc.track_id = t.id
+  LEFT JOIN track_analysis an ON an.track_id = t.id AND an.error IS NULL`;
 const TRACK_FROM = `FROM tracks t ${TRACK_JOINS}`;
 
 const ALBUM_COLS = `
@@ -259,6 +269,27 @@ api.post('/me/2fa/disable', (req, res) => {
   q('UPDATE users SET totp_secret = NULL WHERE id = ?').run(req.user.id);
   log.info(`[auth] ${req.user.username} turned off two-factor sign-in`);
   res.json({ ok: true });
+});
+
+// Friend activity: opt in to show others on this server what you're playing.
+api.put('/me/activity-sharing', (req, res) => {
+  q('UPDATE users SET share_activity = ? WHERE id = ?').run(req.body?.on ? 1 : 0, req.user.id);
+  res.json({ ok: true, on: !!req.body?.on });
+});
+
+api.get('/activity', (req, res) => {
+  const people = q('SELECT id, username FROM users WHERE share_activity = 1 AND id != ?').all(req.user.id);
+  const visible = (id) => !!q('SELECT 1 FROM tracks WHERE id = ?').get(id); // respects this listener's folder access
+  const out = [];
+  for (const u of people) {
+    const now = nowPlayingFor(u.id);
+    if (now?.track?.id && visible(now.track.id)) { out.push({ user: u.username, playing: true, at: now.at, track: now.track }); continue; }
+    const last = q(`SELECT p.played_at AS at, t.id, t.title, t.artist, t.artist_id AS artistId, t.album, t.album_id AS albumId, t.cover, t.duration
+      FROM plays p JOIN tracks t ON t.id = p.track_id WHERE p.user_id = ? ORDER BY p.played_at DESC LIMIT 1`).get(u.id);
+    if (last) out.push({ user: u.username, playing: false, at: last.at, track: { id: last.id, title: last.title, artist: last.artist, artistId: last.artistId, album: last.album, albumId: last.albumId, cover: last.cover, duration: last.duration } });
+  }
+  out.sort((a, b) => (a.playing === b.playing ? b.at - a.at : a.playing ? -1 : 1));
+  res.json({ sharing: !!req.user.share_activity, friends: out });
 });
 
 // Playback state (queue, position, volume...) so listening can resume on another device.
@@ -708,10 +739,34 @@ api.put('/tracks/:id/lyrics', requireAdmin, (req, res) => {
 // ───────────────────────── Radio ─────────────────────────
 
 // ?seed=track:12 | album:<id> | artist:<id> | genre:<name>  &exclude=1,2,3  &limit=50
+/** Full track rows for ids, in the same order (missing ones dropped). */
+function tracksByIds(uid, ids) {
+  if (!ids?.length) return [];
+  const rows = tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE t.id IN (SELECT value FROM json_each($ids))`).all({ uid, ids: JSON.stringify(ids) }));
+  const byId = new Map(rows.map((t) => [t.id, t]));
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
+// "Sounds like": nearest songs by their analysed sound.
+api.get('/tracks/:id/similar', (req, res) => {
+  const ids = similarIds(idParam(req.params.id), { limit: int(req.query.limit, 30, 1, 200) });
+  if (ids == null) return res.status(409).json({ error: 'This song hasn’t been analysed yet. Play it once (or let the server analyse the library) and try again.' });
+  res.json(tracksByIds(req.user.id, ids));
+});
+
+// Mood and time-of-day mixes.
+api.get('/mixes', (req, res) => res.json(mixList(req.user.id)));
+api.get('/mixes/:id', (req, res) => res.json(tracksByIds(req.user.id, mixIds(req.user.id, String(req.params.id), int(req.query.limit, 60, 1, 200)))));
+
 api.get('/radio', h(async (req, res) => {
-  const m = String(req.query.seed || '').match(/^(track|album|artist|genre):(.+)$/);
+  const m = String(req.query.seed || '').match(/^(track|album|artist|genre|sound):(.+)$/);
   if (!m) return res.status(400).json({ error: 'Invalid seed' });
   const exclude = String(req.query.exclude || '').split(',').map(Number).filter(Boolean).slice(0, 3000);
+  if (m[1] === 'sound') {
+    const ids = similarIds(idParam(m[2]), { limit: int(req.query.limit, 50, 1, 200), exclude });
+    if (ids == null) return res.status(409).json({ error: 'This song hasn’t been analysed yet. Play it once and try again.' });
+    return res.json(tracksByIds(req.user.id, ids));
+  }
   const ids = await radioTrackIds(req.user.id, { type: m[1], id: m[2] }, { limit: int(req.query.limit, 50, 1, 200), exclude });
   if (!ids.length) return res.json([]);
   const rows = tracks(q(`SELECT ${TRACK_COLS} ${TRACK_FROM} WHERE t.id IN (SELECT value FROM json_each($ids))`).all({ uid: req.user.id, ids: JSON.stringify(ids) }));
@@ -935,7 +990,7 @@ api.post('/playlists/import', requirePermission('playlists'), express.text({ typ
   if (!entries.length) return res.status(400).json({ error: 'No songs found in that file' });
   const { ids, missing } = matchEntries(entries);
   if (!ids.length) return res.status(400).json({ error: `None of the ${entries.length} songs are in your library`, missing: missing.slice(0, 200) });
-  const title = (name || fileName.replace(/\.(m3u8?|xspf)$/i, '')).trim().slice(0, 100) || 'Imported playlist';
+  const title = (name || fileName.replace(/\.(m3u8?|xspf|csv|tsv|txt)$/i, '')).trim().slice(0, 100) || 'Imported playlist';
   const id = newPlaylist(req.user, title, `Imported from ${fileName}`.slice(0, 500));
   addToPlaylist(id, ids, req.user.id);
   res.json({ id, name: title, matched: ids.length, total: entries.length, missing: missing.slice(0, 200) });
@@ -1115,6 +1170,9 @@ api.post('/party', createParty);
 api.get('/party/:id', getParty);
 api.post('/party/:id/join', joinParty);
 api.post('/party/:id/leave', leaveParty);
+api.post('/party/:id/requests', requestSong);
+api.post('/party/:id/requests/:rid/vote', voteRequest);
+api.delete('/party/:id/requests/:rid', removeRequest);
 
 // ───────────────────────── Admin ─────────────────────────
 
@@ -1193,8 +1251,12 @@ admin.get('/settings', (req, res) => {
     allowFileChanges: !!c.allowFileChanges,
     transcodeCacheMB: c.transcodeCacheMB ?? 2048,
     onlineLyrics: !!c.onlineLyrics, onlineArtistInfo: !!c.onlineArtistInfo, onlineCovers: !!c.onlineCovers,
-    onlinePodcastDirectory: !!c.onlinePodcastDirectory, onlineRadioDirectory: !!c.onlineRadioDirectory,
+    onlinePodcastDirectory: !!c.onlinePodcastDirectory, onlineRadioDirectory: !!c.onlineRadioDirectory, onlineDiscography: !!c.onlineDiscography,
     podcastRefreshHours: Number(c.podcastRefreshHours ?? 6), podcastDownloadMB: Number(c.podcastDownloadMB) || 1024,
+    analysis: c.analysis !== false,
+    snapcast: !!c.snapcast, snapcastHost: c.snapcastHost || '127.0.0.1', snapcastPort: Number(c.snapcastPort) || 4953, snapcastStatus: snapcastStatus(),
+    mqttUrl: c.mqttUrl ? String(c.mqttUrl).replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:••••@') : '', mqttPrefix: c.mqttPrefix || 'sonara', mqttStatus: mqttStatus(),
+    acoustidApiKey: c.acoustidApiKey || '', fingerprint: fingerprintStatus(),
     lastfmApiKey: c.lastfmApiKey || '', lastfmSecretSet: !!c.lastfmSecret, fanartApiKey: c.fanartApiKey || '', onlineContact: c.onlineContact || '',
     downloadsDir: inboxDir(),
     publicUrl: c.publicUrl || '', sharing: c.sharing !== false, importPlaylists: c.importPlaylists !== false,
@@ -1225,10 +1287,11 @@ admin.put('/settings', (req, res) => {
   if (req.body?.scanOnStartup != null) patch.scanOnStartup = !!req.body.scanOnStartup;
   if (req.body?.watch != null) patch.watch = !!req.body.watch;
   if (req.body?.transcodeCacheMB != null) patch.transcodeCacheMB = int(req.body.transcodeCacheMB, 2048, 0, 1024 * 1024);
-  for (const k of ['onlineLyrics', 'onlineArtistInfo', 'onlineCovers', 'onlinePodcastDirectory', 'onlineRadioDirectory']) if (req.body?.[k] != null) patch[k] = !!req.body[k];
+  for (const k of ['onlineLyrics', 'onlineArtistInfo', 'onlineCovers', 'onlinePodcastDirectory', 'onlineRadioDirectory', 'onlineDiscography']) if (req.body?.[k] != null) patch[k] = !!req.body[k];
+  if (req.body?.analysis != null) { patch.analysis = !!req.body.analysis; setTimeout(() => setAnalysisRunning(patch.analysis), 0); }
   if (req.body?.podcastRefreshHours != null) patch.podcastRefreshHours = int(req.body.podcastRefreshHours, 6, 0, 24 * 7);
   if (req.body?.podcastDownloadMB != null) patch.podcastDownloadMB = int(req.body.podcastDownloadMB, 1024, 16, 1024 * 64);
-  for (const k of ['lastfmApiKey', 'lastfmSecret', 'fanartApiKey', 'onlineContact']) if (req.body?.[k] != null) patch[k] = String(req.body[k]).trim().slice(0, 200);
+  for (const k of ['lastfmApiKey', 'lastfmSecret', 'fanartApiKey', 'onlineContact', 'acoustidApiKey']) if (req.body?.[k] != null) patch[k] = String(req.body[k]).trim().slice(0, 200);
   if (req.body?.allowFileChanges != null) patch.allowFileChanges = !!req.body.allowFileChanges;
   if (req.body?.downloadsDir != null) {
     const d = String(req.body.downloadsDir).trim();
@@ -1240,6 +1303,11 @@ admin.put('/settings', (req, res) => {
     } else patch.downloadsDir = '';
   }
   const b = req.body || {};
+  if (b.snapcast != null) patch.snapcast = !!b.snapcast;
+  if (b.snapcastHost != null) patch.snapcastHost = String(b.snapcastHost).trim().slice(0, 200) || '127.0.0.1';
+  if (b.snapcastPort != null) patch.snapcastPort = int(b.snapcastPort, 4953, 1, 65535);
+  if (b.mqttUrl != null && !String(b.mqttUrl).includes('••••')) patch.mqttUrl = String(b.mqttUrl).trim().slice(0, 500);
+  if (b.mqttPrefix != null) patch.mqttPrefix = String(b.mqttPrefix).trim().replace(/[#+\s]/g, '').slice(0, 60) || 'sonara';
   for (const k of ['sharing', 'importPlaylists', 'jukebox', 'dlna', 'proxyAuthAutoCreate', 'oidcAutoCreate', 'logRequests', 'metrics']) if (b[k] != null) patch[k] = !!b[k];
   for (const k of ['proxyAuthHeader', 'oidcIssuer', 'oidcClientId', 'oidcClientSecret', 'oidcLabel', 'oidcUsernameClaim', 'oidcAdminGroup', 'metricsToken', 'mpvPath']) {
     if (b[k] != null) patch[k] = String(b[k]).trim().slice(0, 500);
@@ -1263,6 +1331,10 @@ admin.put('/settings', (req, res) => {
   saveConfig(patch);
   if (patch.jukebox != null || patch.mpvPath != null) setupJukebox().catch(() => {});
   if (patch.dlna != null) setupDlna();
+  if (patch.snapcast != null || patch.snapcastHost != null || patch.snapcastPort != null) {
+    setupSnapcast({ restart: true }).catch(() => {});
+  }
+  if (patch.mqttUrl != null || patch.mqttPrefix != null) setupIntegrations();
   if (patch.backupIntervalHours != null) scheduleBackups();
   if (patch.transcodeCacheMB != null) enforceCacheLimit().catch(() => {});
   scheduleScans();
@@ -1453,6 +1525,9 @@ admin.post('/tracks/tags', h(async (req, res) => {
 }));
 
 // Body: { ids: [...], dir } — move files into one folder, keeping their names.
+// Identify a song by its sound (Chromaprint + AcoustID).
+admin.post('/tracks/:id/identify', h(async (req, res) => res.json(await identify(idParam(req.params.id)))));
+
 admin.post('/tracks/move', h(async (req, res) => {
   assertFileChangesAllowed();
   const dir = String(req.body?.dir || '').trim();
@@ -1664,12 +1739,19 @@ admin.post('/covers', h(async (req, res) => {
   res.json(coverStatus());
 }));
 
+admin.get('/snapcast/rooms', h(async (_req, res) => res.json({ rooms: await snapcastRooms() })));
+
 admin.get('/transcode', h(async (_req, res) => res.json(await cacheStats())));
 admin.delete('/transcode', h(async (_req, res) => { await clearCache(); res.json(await cacheStats()); }));
 
 admin.post('/inbox/jobs/:id/cancel', (req, res) => res.json({ ok: cancelJob(req.params.id) }));
 admin.delete('/inbox/jobs', (_req, res) => { clearFinishedJobs(); res.json({ ok: true }); });
 
+api.use(analysisApi);
+api.use('/bookmarks', bookmarksApi);
+api.use(discographyApi);
+api.use('/me/history', historyApi);
+api.use('/me/webhooks', webhooksApi);
 api.use('/podcasts', podcastsApi);
 api.use('/stations', stationsApi);
 

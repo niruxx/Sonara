@@ -2,7 +2,7 @@
 //
 // rules: { match: 'all' | 'any', rules: [{ field, op, value, value2? }] }
 // The generated WHERE clause expects the track query aliases used in api.js:
-//   t = tracks, f = favorites, r = ratings, pc = per-user play counts.
+//   t = tracks, f = favorites, r = ratings, pc = per-user play counts, an = audio analysis.
 
 const TEXT = 'text', NUM = 'num', DATE = 'date', BOOL = 'bool', LIST = 'list';
 
@@ -23,6 +23,10 @@ export const FIELDS = {
   lossless: { type: BOOL, label: 'Lossless', sql: '(t.lossless = 1)' },
   releaseType: { type: TEXT, label: 'Release type', sql: "(CASE WHEN t.compilation = 1 THEN 'compilation' ELSE COALESCE(t.release_type, 'album') END)" },
   codec: { type: TEXT, label: 'Format', sql: 't.codec' },
+  bpm: { type: NUM, label: 'Tempo (BPM)', sql: 'an.bpm' },
+  key: { type: TEXT, label: 'Key', sql: 'an.musical_key' },
+  camelot: { type: TEXT, label: 'Key (Camelot)', sql: 'an.camelot' },
+  energy: { type: NUM, label: 'Energy (0–100)', sql: '(an.energy * 100)' },
 };
 
 export const OPS = {
@@ -44,6 +48,8 @@ export const SORTS = {
   leastRecent: 'pc.last IS NOT NULL, pc.last ASC',
   mostPlayed: 'COALESCE(pc.n, 0) DESC',
   rating: 'COALESCE(r.rating, 0) DESC, RANDOM()',
+  bpm: 'an.bpm IS NULL, an.bpm',
+  energy: 'an.energy IS NULL, an.energy DESC',
 };
 
 const escLike = (s) => String(s).replace(/[\\%_]/g, (m) => '\\' + m);

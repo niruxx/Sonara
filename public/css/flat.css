@@ -1,0 +1,169 @@
+/* ==========================================================================
+   Sonara — flat theme (the default look)
+   Solid neutral surfaces, thin borders, one solid accent taken from the album
+   art, no glass, glows, gradients or 3D tilt. Everything is scoped to
+   body.flat, so the classic glass look (Settings → Appearance) is untouched.
+   ========================================================================== */
+
+body.flat {
+  --bg: #0f0f12;
+  --surface: #16161a;
+  --surface-2: #1c1c21;
+  --surface-3: #25252b;
+  --surface-4: #2e2e35;
+  --text: #ededf2;
+  --text-2: #b0b0ba;
+  --text-3: #7c7c87;
+  --glass: var(--surface-2);
+  --glass-2: var(--surface-3);
+  --glass-3: var(--surface-4);
+  --border: #26262c;
+  --border-2: #33333b;
+  --shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  --radius: 12px;
+  --radius-sm: 8px;
+  /* Accent: the album colour, toned so it reads well as text and as a fill behind white text. */
+  --accent: color-mix(in oklab, var(--c1) 72%, white);
+  --acc: color-mix(in oklab, var(--c1) 82%, black);
+  --grad: linear-gradient(var(--acc), var(--acc));
+  --pulse: 0 !important;
+  background: var(--bg);
+}
+
+/* Background: plain, with at most a faint tint of the album colour at the top. */
+body.flat .ambient .blob, body.flat .ambient .noise, body.flat .ambient::after { display: none; }
+body.flat .ambient-cover { display: none; }
+body.flat .ambient { background: linear-gradient(180deg, color-mix(in oklab, var(--c1) 9%, var(--bg)) 0, var(--bg) 420px); }
+body.flat.no-ambient .ambient { background: var(--bg); }
+body.flat .ripple { display: none; }
+
+/* ───────── Shell ───────── */
+body.flat .sidebar { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; border-right: 1px solid var(--border); }
+body.flat .brand-name { background: none; color: var(--text); animation: none; -webkit-background-clip: border-box; background-clip: border-box; }
+body.flat .logo-mark span { background: var(--accent); }
+body.flat .nav-item { border-radius: 8px; transition: color .15s, background .15s; }
+body.flat .nav-item:hover svg { transform: none; }
+body.flat .nav-item:active { transform: none; }
+body.flat .nav-item.active { background: var(--surface-3); }
+body.flat .nav-item.active::before { background: var(--accent); box-shadow: none; top: 25%; bottom: 25%; animation: none; }
+body.flat .user-chip { border-radius: 10px; background: var(--surface-2); }
+body.flat .avatar { background: var(--acc); box-shadow: none; }
+body.flat .topbar.scrolled { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
+body.flat .search input { border-radius: 10px; background: var(--surface-2); border-color: var(--border); }
+body.flat .search input:focus { background: var(--surface-3); border-color: var(--accent); box-shadow: none; }
+body.flat .search input:focus ~ svg, body.flat .search:focus-within svg { transform: none; }
+body.flat .view-enter { animation: flatViewIn .25s ease-out backwards; }
+@keyframes flatViewIn { from { opacity: 0; transform: translateY(6px); } }
+
+/* ───────── Typography ───────── */
+body.flat .page-title { font-weight: 750; letter-spacing: -0.035em; }
+body.flat .hero-title { font-weight: 800; letter-spacing: -0.04em; text-shadow: none; }
+body.flat .section-head h2 { font-weight: 700; letter-spacing: -0.02em; }
+
+/* ───────── Buttons ───────── */
+body.flat .btn { border-radius: 8px; background: var(--surface-3); border: 1px solid transparent; transition: background .15s, opacity .15s; }
+body.flat .btn:hover { background: var(--surface-4); transform: none; }
+body.flat .btn:active { transform: none; opacity: .85; }
+body.flat .btn.primary { background: var(--acc); color: #fff; box-shadow: none; }
+body.flat .btn.primary::after { display: none; }
+body.flat .btn.primary:hover { background: color-mix(in oklab, var(--acc) 88%, white); box-shadow: none; }
+body.flat .btn.ghost { background: transparent; }
+body.flat .btn.ghost:hover { background: var(--surface-3); }
+body.flat .btn.danger { background: rgba(239,68,68,.12); border-color: transparent; }
+body.flat .icon-btn { border-radius: 8px; transition: color .15s, background .15s; }
+body.flat .icon-btn:active { transform: none; opacity: .8; }
+body.flat .icon-btn.on::after { box-shadow: none; }
+body.flat .play-fab { background: var(--acc); box-shadow: none; transition: background .15s; }
+body.flat .play-fab:hover { transform: none; background: color-mix(in oklab, var(--acc) 88%, white); box-shadow: none; }
+body.flat .play-fab:active { transform: none; opacity: .85; }
+body.flat .heart.on svg { filter: none; }
+
+/* ───────── Chips ───────── */
+body.flat .chips { background: none; border: 0; padding: 0; gap: 8px; }
+body.flat .chip { height: 32px; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
+body.flat .chip:hover { background: var(--surface-3); color: var(--text); }
+body.flat .chip.active { background: var(--text); color: var(--bg); box-shadow: none; }
+
+/* ───────── Cards ───────── */
+body.flat .card { transform: none !important; padding: 10px; border-radius: var(--radius); background: transparent; border: 1px solid transparent; transition: background .15s; animation: flatViewIn .3s ease-out backwards; animation-delay: calc(min(var(--i, 0), 24) * 15ms); }
+body.flat .card:hover { background: var(--surface-2); border-color: transparent; box-shadow: none; transition: background .15s; }
+body.flat .card::after { display: none; }
+body.flat .card-art { border-radius: 8px; box-shadow: none; }
+body.flat .card:hover .card-art img, body.flat .card:hover .card-art .ph { transform: none; }
+body.flat .card-play { background: var(--acc); box-shadow: 0 6px 16px rgba(0,0,0,.4); transform: translateY(6px); transition: opacity .15s, transform .15s; }
+body.flat .card-play:hover { transform: scale(1.06) !important; }
+body.flat .genre-tile { border-radius: var(--radius); background: hsl(var(--h1) 45% 32%); transition: background .15s; }
+body.flat .genre-tile:hover { transform: none; box-shadow: none; background: hsl(var(--h1) 45% 37%); }
+body.flat .genre-tile img { box-shadow: none; }
+body.flat .ph { background: hsl(var(--h1) 30% 26%) !important; }
+body.flat .hero-art { border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); animation: none; }
+body.flat .hero-info { animation: none; }
+body.flat .tl-cover { border-radius: 6px; box-shadow: none; }
+body.flat .tl-row { border-radius: 8px; }
+body.flat .tl-row.selected { background: color-mix(in oklab, var(--c1) 14%, var(--surface-2)); }
+body.flat .tl-row.drop-before::before, body.flat .q-item.drop-before::before { box-shadow: none; }
+body.flat .badge { border-radius: 4px; background: var(--surface-3); }
+
+/* ───────── Player bar ───────── */
+body.flat .playerbar { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; border-top: 1px solid var(--border); }
+body.flat .playerbar::before { display: none; }
+body.flat .pb-cover { border-radius: 6px; box-shadow: none; }
+body.flat .pb-cover:hover { transform: none; }
+body.flat .pb-play { box-shadow: none; transition: transform .1s; }
+body.flat .pb-play:hover { transform: scale(1.04); box-shadow: none; }
+body.flat .range::-webkit-slider-runnable-track { background: linear-gradient(90deg, var(--text) var(--pct), var(--surface-4) var(--pct)); }
+body.flat .range:hover::-webkit-slider-runnable-track { background: linear-gradient(90deg, var(--accent) var(--pct), var(--surface-4) var(--pct)); }
+body.flat .range::-moz-range-track { background: var(--surface-4); }
+body.flat .range::-moz-range-progress { background: var(--text); }
+body.flat .range:hover::-moz-range-progress { background: var(--accent); }
+body.flat .range::-webkit-slider-thumb { box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+body.flat .pb-progress .range::-webkit-slider-runnable-track { box-shadow: none; }
+
+/* ───────── Overlays ───────── */
+body.flat .drawer { border-radius: 12px; background: var(--surface); border: 1px solid var(--border-2); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: var(--shadow); transition: transform .3s ease-out; }
+body.flat .q-item { border-radius: 8px; }
+body.flat .q-item.current { background: var(--surface-3); }
+body.flat .menu { border-radius: 10px; padding: 5px; background: var(--surface-2); border: 1px solid var(--border-2); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: var(--shadow); animation: flatMenuIn .12s ease-out; }
+@keyframes flatMenuIn { from { opacity: 0; transform: translateY(-4px); } }
+body.flat .menu-item { border-radius: 6px; padding: 8px 10px; font-weight: 500; color: var(--text); }
+body.flat .menu-item svg { color: var(--text-2); }
+body.flat .menu-item:hover, body.flat .menu-item:focus-visible { background: var(--surface-4); }
+body.flat .menu-sep { background: var(--border-2); margin: 4px 6px; }
+body.flat .menu-head { padding: 8px 10px 6px; }
+body.flat .modal-backdrop { background: rgba(0,0,0,.6); backdrop-filter: none; -webkit-backdrop-filter: none; }
+body.flat .modal { border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border-2); box-shadow: var(--shadow); animation: flatMenuIn .18s ease-out; }
+body.flat .modal h3 { font-weight: 700; }
+body.flat .toast { border-radius: 8px; background: var(--surface-3); border: 1px solid var(--border-2); box-shadow: var(--shadow); backdrop-filter: none; -webkit-backdrop-filter: none; animation: flatMenuIn .2s ease-out; }
+
+/* Now Playing: a calm, solid stage tinted by the album colour. */
+body.flat .np { background: color-mix(in oklab, var(--c1) 14%, #0b0b0e); }
+body.flat .np-bg { filter: blur(60px) saturate(1.1) brightness(.35); transform: scale(1.1); opacity: .5; }
+body.flat .np-art { border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,.5); transform: none !important; transition: none; }
+body.flat .np.paused .np-art { transform: none !important; opacity: .85; }
+body.flat .np-art.swap { animation: flatViewIn .3s ease-out; }
+body.flat .np-title { font-weight: 750; }
+
+/* ───────── Forms and panels ───────── */
+body.flat .field input, body.flat .field textarea, body.flat .input { border-radius: 8px; background: var(--surface-2); border-color: var(--border-2); }
+body.flat .field input:focus, body.flat .field textarea:focus, body.flat .input:focus { border-color: var(--accent); background: var(--surface-2); box-shadow: none; }
+body.flat .check .sw { background: var(--surface-4); }
+body.flat .check input:checked + .sw { background: var(--acc); }
+body.flat .check .sw::after { box-shadow: none; }
+body.flat .auth-card { border-radius: 14px; background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: var(--shadow); animation: flatMenuIn .3s ease-out; }
+body.flat .panel { border-radius: var(--radius); background: var(--surface); border-color: var(--border); animation: flatViewIn .3s ease-out backwards; }
+body.flat .list-row, body.flat .stat, body.flat .find-row { border-radius: 8px; background: var(--surface-2); }
+body.flat .stat b { background: none; color: var(--text); -webkit-background-clip: border-box; background-clip: border-box; }
+body.flat .progress i { box-shadow: none; }
+body.flat .empty .empty-icon { border-radius: 14px; background: var(--surface-2); }
+body.flat .skeleton { background: var(--surface-2); }
+body.flat .mobile-nav { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+body.flat .count-badge, body.flat .skip-link { background: var(--acc); box-shadow: none; }
+body.flat .live-badge { box-shadow: none; }
+body.flat .ep-row { border-radius: 8px; }
+body.flat .ep-row.current { background: var(--surface-2); }
+body.flat .ep-cover { border-radius: 6px; }
+body.flat .swatch.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text); }
+body.flat .greeting { background: none; -webkit-background-clip: border-box; background-clip: border-box; color: var(--accent); animation: none; }
+body.flat .friend { border-radius: 8px; background: var(--surface-2); }
+body.flat .friend:hover { background: var(--surface-3); }
+body.flat .mix-label { background: linear-gradient(transparent, rgba(0,0,0,.6)); }
