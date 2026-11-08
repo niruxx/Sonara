@@ -299,6 +299,16 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1   # Windows (or d
 
 This removes the service or Scheduled Task, the firewall rule and `node_modules`. Afterwards it asks before deleting your Sonara data (default: **keep it**) and before deleting the app folder itself. Pass `--purge` / `-Purge` to delete the data without being asked. **Music files are never deleted.**
 
+On Linux, remove the systemd service, dependencies, and Sonara data without prompts:
+
+```bash
+bash scripts/uninstall.sh --purge --yes
+# Also remove the Sonara checkout:
+bash scripts/uninstall.sh --purge --remove-app --yes
+```
+
+Run this from the installed checkout. The script uses sudo for systemd operations; if the checkout or data is root-owned, run it with `sudo bash` instead. For a custom data location, pass `--data-dir /path/to/sonara-data` (or set `SONARA_DATA_DIR`). Use the same location configured for the running service; service environment overrides are not detected automatically. Purging permanently removes the database, accounts, playlists, cached artwork, backups, and other files in that data directory. Keep music libraries outside the checkout and Sonara data directory: those directories are deleted in full when requested. Node.js and git remain installed.
+
 ## 💾 Your data
 
 | Path | What it is |
